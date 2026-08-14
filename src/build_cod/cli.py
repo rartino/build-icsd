@@ -42,7 +42,9 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Build an httk database from COD CIF files.")
     parser.add_argument("cod_path", nargs="?", type=Path, help="DATA/COD or a directory containing CIF files")
     parser.add_argument("--format", choices=("sqlite", "duckdb"), default="sqlite", dest="database_format")
-    parser.add_argument("--output", type=Path, help="new database file (default: cod.sqlite or cod.duckdb)")
+    parser.add_argument(
+        "--output", type=Path, help="new database file (default: database/cod.sqlite or database/cod.duckdb)"
+    )
     parser.add_argument("--workers", type=_positive_int, default=_default_workers())
     parser.add_argument("--progress-every", type=_positive_int, default=1000)
     return parser
@@ -64,7 +66,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("COD path is required (pass it positionally or set COD_PATH)")
 
     print(f"Discovering CIF files under {cod_path}...", flush=True)
-    output = args.output or Path(f"cod.{args.database_format}")
+    output = args.output or Path("database") / f"cod.{args.database_format}"
     if output.exists():
         parser.error(f"refusing to overwrite or append to existing output: {output}")
     try:
@@ -76,6 +78,7 @@ def main(argv: list[str] | None = None) -> int:
     if not paths:
         parser.error(f"no .cif files found under {cod_path}")
 
+    output.parent.mkdir(parents=True, exist_ok=True)
     database = Database.sqlite(output) if args.database_format == "sqlite" else Database.duckdb(output)
     started = time.monotonic()
     submitted = 0

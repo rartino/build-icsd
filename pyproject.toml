@@ -11,6 +11,7 @@ requires-python = ">=3.12"
 dependencies = [
   "httk-atomistic>=0.2.0,<0.3",
   "httk-io>=0.2.0,<0.3",
+  "httk-serve>=0.2.0,<0.3",
   "httk-store[db]>=0.2.0,<0.3",
 ]
 
@@ -23,20 +24,21 @@ dev = [
 
 [project.scripts]
 build-cod = "build_cod.cli:main"
+serve-cod-optimade = "serve_cod_optimade.cli:main"
 
 [tool.setuptools]
-package-dir = {"" = "src/build-cod"}
+package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
-where = ["src/build-cod"]
+where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src/build-cod"]
+pythonpath = ["src"]
 
 [tool.ruff]
 target-version = "py312"
-src = ["src/build-cod", "tests"]
+src = ["src", "tests"]
 line-length = 120
 
 [tool.ruff.format]

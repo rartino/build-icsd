@@ -1,7 +1,10 @@
 import sqlite3
 from pathlib import Path
 
+from starlette.testclient import TestClient
+
 from build_cod.cli import main
+from serve_cod_optimade.cli import main as serve_main
 
 
 def test_build_cod_cli_with_cod_path_fallback(tmp_path: Path, monkeypatch, capsys) -> None:
@@ -45,3 +48,14 @@ C1 C 0 0 0
     captured = capsys.readouterr().out
     assert "Submitted/queued 1/1 structures" in captured
     assert "Completed 1/1 structures" in captured
+
+    responses = []
+
+    def run_dev_server(*, app, host: str, port: int) -> None:
+        with TestClient(app, base_url=f"http://{host}:{port}") as client:
+            responses.append(client.get("/v1/structures"))
+
+    monkeypatch.setattr("httk.serve.optimade.api.run_dev_server", run_dev_server)
+    assert serve_main(["--database", str(output), "--port", "8123"]) == 0
+    assert responses[0].status_code == 200
+    assert responses[0].json()["meta"]["data_available"] == 1
