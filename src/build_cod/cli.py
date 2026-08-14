@@ -7,12 +7,13 @@ from pathlib import Path
 
 from httk.atomistic import (
     ASUStructureRecord,
-    ASUStructureView,
     FundamentalDomainStructureRecord,
     UnitcellStructureRecord,
 )
 from httk.atomistic.entries.structures import StructureEntry
 from httk.store.db import Database, SqlStore
+
+from build_cod.records import StructureImportRecord
 
 
 def _positive_int(value: str) -> int:
@@ -53,7 +54,7 @@ def _parser() -> argparse.ArgumentParser:
 def _report_progress(submitted: int, total: int, started: float) -> None:
     elapsed = max(time.monotonic() - started, 1e-9)
     print(
-        f"Submitted/queued {submitted}/{total} structures; elapsed {elapsed:.1f}s; rate {submitted / elapsed:.1f}/s",
+        f"Submitted/queued {submitted}/{total} CIF imports; elapsed {elapsed:.1f}s; rate {submitted / elapsed:.1f}/s",
         flush=True,
     )
 
@@ -96,7 +97,7 @@ def main(argv: list[str] | None = None) -> int:
             finalize="deferred",
         ) as bulk:
             for path in paths:
-                bulk.save(ASUStructureView(path))
+                bulk.save(path, as_record=StructureImportRecord, promote=ASUStructureRecord)
                 submitted += 1
                 if submitted % args.progress_every == 0:
                     _report_progress(submitted, len(paths), started)
@@ -104,7 +105,8 @@ def main(argv: list[str] | None = None) -> int:
 
     elapsed = max(time.monotonic() - started, 1e-9)
     print(
-        f"Completed {submitted}/{len(paths)} structures; elapsed {elapsed:.1f}s; rate {submitted / elapsed:.1f}/s; output {output}",
+        f"Completed {submitted}/{len(paths)} CIF imports; elapsed {elapsed:.1f}s; "
+        f"rate {submitted / elapsed:.1f}/s; output {output}",
         flush=True,
     )
     return 0

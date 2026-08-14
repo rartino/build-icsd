@@ -34,6 +34,22 @@ C1 C 0 0 0
 """,
         encoding="utf-8",
     )
+    broken = cod / "cif" / "2.cif"
+    broken.write_text(
+        """data_two
+_cell_length_a 1
+_cell_length_b 1
+_cell_length_c 1
+_cell_angle_alpha 90
+_cell_angle_beta 90
+_cell_angle_gamma 90
+_space_group_IT_number 1
+loop_
+_atom_site_label
+C1
+""",
+        encoding="utf-8",
+    )
     output = tmp_path / "cod.sqlite"
     monkeypatch.setenv("COD_PATH", str(cod))
 
@@ -45,9 +61,13 @@ C1 C 0 0 0
         assert connection.execute(
             "SELECT COUNT(*) FROM atomistic_asu_structure_v3 WHERE _httk_role = 1"
         ).fetchone() == (1,)
+        assert connection.execute("SELECT COUNT(*) FROM cod_structure_import_v1").fetchone() == (2,)
+        error = connection.execute("SELECT error FROM cod_structure_import_v1 WHERE error IS NOT NULL").fetchone()[0]
+        assert "this CIF holds no structure that could be interpreted" in error
+        assert "missing one or more required atom-site columns" in error
     captured = capsys.readouterr().out
-    assert "Submitted/queued 1/1 structures" in captured
-    assert "Completed 1/1 structures" in captured
+    assert "Submitted/queued 2/2 CIF imports" in captured
+    assert "Completed 2/2 CIF imports" in captured
 
     responses = []
 
