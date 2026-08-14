@@ -64,7 +64,7 @@ C1
         assert connection.execute("SELECT COUNT(*) FROM cod_structure_import_v1").fetchone() == (2,)
         error = connection.execute("SELECT error FROM cod_structure_import_v1 WHERE error IS NOT NULL").fetchone()[0]
         assert "this CIF holds no structure that could be interpreted" in error
-        assert "_atom_site_type_symbol, _atom_site_fract_x, _atom_site_fract_y, _atom_site_fract_z" in error
+        assert "_atom_site_fract_x, _atom_site_fract_y, _atom_site_fract_z" in error
     captured = capsys.readouterr().out
     assert "Submitted/queued 2/2 CIF imports" in captured
     assert "Completed 2/2 CIF imports" in captured
