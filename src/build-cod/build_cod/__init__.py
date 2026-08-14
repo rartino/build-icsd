@@ -1,0 +1,1 @@
+"""Build COD structure databases."""

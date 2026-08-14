@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "build-cod"
+version = "0.1.0"
+description = "Build an httk structure database from a COD CIF tree."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "httk-atomistic>=0.2.0,<0.3",
+  "httk-io>=0.2.0,<0.3",
+  "httk-store[db]>=0.2.0,<0.3",
+]
+
+[project.optional-dependencies]
+duckdb = ["httk-store[duckdb,parallel]>=0.2.0,<0.3"]
+dev = [
+  "pytest>=8.0",
+  "ruff>=0.16,<0.17",
+]
+
+[project.scripts]
+build-cod = "build_cod.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src/build-cod"}
+
+[tool.setuptools.packages.find]
+where = ["src/build-cod"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src/build-cod"]
+
+[tool.ruff]
+target-version = "py312"
+src = ["src/build-cod", "tests"]
+line-length = 120
+
+[tool.ruff.format]
+quote-style = "preserve"
