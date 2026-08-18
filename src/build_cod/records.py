@@ -30,8 +30,8 @@ class StructureImportRecord:
     """Record one source path and either its imported ASU or its failure."""
 
     __httk_storage__: ClassVar[StorageInfo] = StorageInfo(
-        storage_name="cod_structure_import_v1",
-        identity_name="cod_structure_import_v1",
+        storage_name="cod_structure_import",
+        identity_name="cod_structure_import",
         indexes=(("source",), ("autocorrected",)),
     )
     __httk_canonical_source__: ClassVar[type[Path]] = Path

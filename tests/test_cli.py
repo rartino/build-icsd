@@ -59,10 +59,10 @@ C1
     with sqlite3.connect(output) as connection:
         assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok",)
         assert connection.execute(
-            "SELECT COUNT(*) FROM atomistic_asu_structure_v3 WHERE _httk_role = 1"
+            "SELECT COUNT(*) FROM atomistic_asu_structure WHERE _httk_role = 1"
         ).fetchone() == (1,)
-        assert connection.execute("SELECT COUNT(*) FROM cod_structure_import_v1").fetchone() == (2,)
-        error = connection.execute("SELECT error FROM cod_structure_import_v1 WHERE error IS NOT NULL").fetchone()[0]
+        assert connection.execute("SELECT COUNT(*) FROM cod_structure_import").fetchone() == (2,)
+        error = connection.execute("SELECT error FROM cod_structure_import WHERE error IS NOT NULL").fetchone()[0]
         assert "this CIF holds no structure that could be interpreted" in error
         assert "_atom_site_fract_x, _atom_site_fract_y, _atom_site_fract_z" in error
     captured = capsys.readouterr().out

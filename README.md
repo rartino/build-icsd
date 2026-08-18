@@ -5,7 +5,7 @@ it over OPTIMADE. The input may be `DATA/COD` (with a `cif/` directory) or a
 directory containing CIF files. Existing output files are never overwritten or
 appended to.
 
-Every file produces a `cod_structure_import_v1` row. Successful rows reference
+Every file produces a `cod_structure_import` row. Successful rows reference
 the promoted structure; failed rows retain the exception and any collected
 warning reports, so one malformed CIF does not abort the build. Autocorrect is
 retried only when the strict reader explicitly recommends it.
