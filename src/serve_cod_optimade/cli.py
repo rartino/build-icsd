@@ -4,7 +4,7 @@ import argparse
 from pathlib import Path
 
 from httk.serve.optimade import serve
-from httk.store.db import Database, SqlStore
+from httk.store import Backend, SqlStore
 
 
 def _port(value: str) -> int:
@@ -30,7 +30,7 @@ def main(argv: list[str] | None = None) -> int:
     if not path.is_file():
         parser.error(f"database does not exist: {path}; run make build first")
 
-    database = Database.sqlite(path) if args.database_format == "sqlite" else Database.duckdb(path)
+    database = Backend.sqlite(path) if args.database_format == "sqlite" else Backend.duckdb(path)
     with database:
         store = SqlStore(database)
         print(f"Serving {path} at http://{args.host}:{args.port}/v1/structures", flush=True)

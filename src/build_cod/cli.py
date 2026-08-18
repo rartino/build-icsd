@@ -11,7 +11,7 @@ from httk.atomistic import (
     UnitcellStructureRecord,
 )
 from httk.atomistic.entries.structures import StructureEntry
-from httk.store.db import Database, SqlStore
+from httk.store import Backend, SqlStore
 
 from build_cod.records import StructureImportRecord
 
@@ -80,7 +80,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(f"no .cif files found under {cod_path}")
 
     output.parent.mkdir(parents=True, exist_ok=True)
-    database = Database.sqlite(output) if args.database_format == "sqlite" else Database.duckdb(output)
+    database = Backend.sqlite(output) if args.database_format == "sqlite" else Backend.duckdb(output)
     started = time.monotonic()
     submitted = 0
     with database:
