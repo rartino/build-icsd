@@ -85,3 +85,65 @@ class StructureImportRecord:
             "autocorrect_attempted": autocorrect_attempted,
             "autocorrected": autocorrected,
         }
+
+
+@dataclass(frozen=True)
+class CanonicalizationRecord:
+    """Record the pass-2 canonicalization outcome for one imported structure.
+
+    Exactly one of ``canonical_content_id`` (success) or ``error`` (failure) is set.
+    ``source`` is the importing ``cod_structure_import`` row's path and is the resume
+    key: pass 2 processes import rows whose ``source`` has no canonicalization row yet.
+    The content-id columns are loose references (the same layout-independent content
+    identities used by the searcher and OPTIMADE serving) to the original and canonical
+    structures, the derived prototype and protostructure, and the provenance run.
+
+    A ``--retry-errors`` retry supersedes an error row with ``store.replace``, which keeps the
+    old row queryable, so after retries the table holds superseded lineage rows. Raw
+    ``COUNT(*)`` therefore over-counts; the current-state "canonicalized imports" count is
+    ``SELECT COUNT(DISTINCT source) WHERE error IS NULL`` (one success per source, retry-proof).
+
+    :param source: The importing row's source path (the resume/link key).
+    :param original_content_id: The content id of the imported (pre-canonicalization) structure.
+    :param canonical_content_id: The content id of the canonical structure, or ``None`` on failure.
+    :param prototype_content_id: The content id of the derived prototype, or ``None`` on failure.
+    :param protostructure_content_id: The content id of the derived protostructure, or ``None`` on failure.
+    :param run_content_id: The content id of the provenance run, or ``None`` on failure.
+    :param error: The per-structure failure text, or ``None`` on success.
+    :param lift: Whether higher-pseudosymmetry lifting was requested for this structure.
+    """
+
+    __httk_storage__: ClassVar[StorageInfo] = StorageInfo(
+        storage_name="cod_canonicalization_v1",
+        identity_name="cod_canonicalization_v1",
+        indexes=(("source",), ("protostructure_content_id",)),
+    )
+
+    source: str
+    original_content_id: str
+    canonical_content_id: str | None
+    prototype_content_id: str | None
+    protostructure_content_id: str | None
+    run_content_id: str | None
+    error: str | None
+    lift: bool
+
+    @property
+    def id(self) -> str:
+        """Return the layout-independent content identity of this record."""
+        return content_id(self)
+
+    def __post_init__(self) -> None:
+        for name in ("source", "original_content_id"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"CanonicalizationRecord {name} must be a non-empty string")
+        if not isinstance(self.lift, bool):
+            raise TypeError("CanonicalizationRecord lift must be a bool")
+        if (self.canonical_content_id is None) == (self.error is None):
+            raise ValueError("CanonicalizationRecord requires exactly one of canonical_content_id or error")
+        derived = (self.prototype_content_id, self.protostructure_content_id, self.run_content_id)
+        if self.error is not None and any(value is not None for value in derived):
+            raise ValueError("a failed canonicalization must not carry derived references")
+        if self.canonical_content_id is not None and any(value is None for value in derived):
+            raise ValueError("a successful canonicalization requires prototype, protostructure, and run references")

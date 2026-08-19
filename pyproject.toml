@@ -23,6 +23,7 @@ dev = [
 
 [project.scripts]
 build-cod = "build_cod.cli:main"
+build-cod-canonicalize = "build_cod.canonicalize:main"
 serve-cod-optimade = "serve_cod_optimade.cli:main"
 
 [tool.setuptools]

@@ -5,14 +5,10 @@ import os
 import time
 from pathlib import Path
 
-from httk.atomistic import (
-    ASUStructureRecord,
-    FundamentalDomainStructureRecord,
-    UnitcellStructureRecord,
-)
-from httk.atomistic.entries.structures import StructureEntry
+from httk.atomistic import ASUStructureRecord
 from httk.store import Backend, SqlStore
 
+from build_cod.layout import entry_records
 from build_cod.records import StructureImportRecord
 
 
@@ -42,7 +38,7 @@ def _cif_paths(cod_path: Path) -> tuple[Path, ...]:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Build an httk database from COD CIF files.")
     parser.add_argument("cod_path", nargs="?", type=Path, help="DATA/COD or a directory containing CIF files")
-    parser.add_argument("--format", choices=("sqlite", "duckdb"), default="sqlite", dest="database_format")
+    parser.add_argument("--format", choices=("sqlite", "duckdb"), default="duckdb", dest="database_format")
     parser.add_argument(
         "--output", type=Path, help="new database file (default: database/cod.sqlite or database/cod.duckdb)"
     )
@@ -83,18 +79,21 @@ def main(argv: list[str] | None = None) -> int:
     database = Backend.sqlite(output) if args.database_format == "sqlite" else Backend.duckdb(output)
     started = time.monotonic()
     submitted = 0
+    # DuckDB's 'deferred' finalize mis-counts promoted roots (an upstream httk-store bug);
+    # 'parity' is the equivalent that works there. SQLite keeps the lower-memory 'deferred'.
+    finalize = "deferred" if args.database_format == "sqlite" else "parity"
     with database:
-        store = SqlStore(
-            database,
-            entry_records={
-                StructureEntry: (UnitcellStructureRecord, FundamentalDomainStructureRecord, ASUStructureRecord)
-            },
-        )
+        store = SqlStore(database, entry_records=entry_records())
         with store.bulk_ingest(
             workers=args.workers,
             track_sids=False,
             verify_metadata=False,
-            finalize="deferred",
+            finalize=finalize,
+            # Flush each worker to its shard every few thousand records instead of
+            # buffering its whole share (the 100k default exceeds records-per-worker
+            # at this scale, so workers would otherwise never flush and hold every
+            # encoded row in RAM); flushing also drives the per-worker malloc_trim.
+            chunk_size=2000,
         ) as bulk:
             for path in paths:
                 bulk.save(path, as_record=StructureImportRecord, promote=ASUStructureRecord)

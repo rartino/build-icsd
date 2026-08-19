@@ -53,14 +53,14 @@ C1
     output = tmp_path / "cod.sqlite"
     monkeypatch.setenv("COD_PATH", str(cod))
 
-    assert main(["--output", str(output), "--workers", "2", "--progress-every", "1"]) == 0
+    assert main(["--format", "sqlite", "--output", str(output), "--workers", "2", "--progress-every", "1"]) == 0
 
     assert output.is_file()
     with sqlite3.connect(output) as connection:
         assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok",)
-        assert connection.execute(
-            "SELECT COUNT(*) FROM atomistic_asu_structure WHERE _httk_role = 1"
-        ).fetchone() == (1,)
+        assert connection.execute("SELECT COUNT(*) FROM atomistic_asu_structure WHERE _httk_role = 1").fetchone() == (
+            1,
+        )
         assert connection.execute("SELECT COUNT(*) FROM cod_structure_import").fetchone() == (2,)
         error = connection.execute("SELECT error FROM cod_structure_import WHERE error IS NOT NULL").fetchone()[0]
         assert "this CIF holds no structure that could be interpreted" in error
