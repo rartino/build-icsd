@@ -10,9 +10,9 @@ Only the OPTIMADE ``structures`` family is declared. The pass-2 records
 ``cod_canonicalization_v1``) are stored as on-demand internal tables, exactly like the
 pass-1 ``cod_structure_import`` table: they need no entry declaration to be saved or
 queried. Keeping them out of the entry declaration is deliberate -- adding them would make
-the OPTIMADE server try to serve families that have no served definition yet, and would
-break DuckDB's parallel bulk import (whose finalize references every declared table). See
-README "Two passes and the database declaration".
+the OPTIMADE server try to serve families that have no served definition yet (serving is
+out of scope for now). A minimal declaration is the right default regardless. See README
+"Two passes and the database declaration".
 """
 
 from httk.atomistic import (

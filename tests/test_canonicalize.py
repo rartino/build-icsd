@@ -123,6 +123,10 @@ def _canonicalization_rows(store) -> list[CanonicalizationRecord]:
 
 @pytest.mark.parametrize("fmt", ["sqlite", "duckdb"])
 def test_two_pass_import_and_canonicalization(tmp_path: Path, fmt: str) -> None:
+    # The DuckDB parametrization runs pass 1 as a parallel (workers=2) `deferred`-finalize
+    # import with a promote= record -- the exact path two httk-store bugs once broke. It now
+    # passing on DuckDB with the same `deferred` finalize SQLite uses is the regression guard
+    # for that upstream fix; do not special-case DuckDB (workers=1 or parity) to keep it green.
     pytest.importorskip("spglib")
     if fmt == "duckdb":
         pytest.importorskip("duckdb_engine")

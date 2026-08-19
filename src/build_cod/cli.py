@@ -79,16 +79,13 @@ def main(argv: list[str] | None = None) -> int:
     database = Backend.sqlite(output) if args.database_format == "sqlite" else Backend.duckdb(output)
     started = time.monotonic()
     submitted = 0
-    # DuckDB's 'deferred' finalize mis-counts promoted roots (an upstream httk-store bug);
-    # 'parity' is the equivalent that works there. SQLite keeps the lower-memory 'deferred'.
-    finalize = "deferred" if args.database_format == "sqlite" else "parity"
     with database:
         store = SqlStore(database, entry_records=entry_records())
         with store.bulk_ingest(
             workers=args.workers,
             track_sids=False,
             verify_metadata=False,
-            finalize=finalize,
+            finalize="deferred",
             # Flush each worker to its shard every few thousand records instead of
             # buffering its whole share (the 100k default exceeds records-per-worker
             # at this scale, so workers would otherwise never flush and hold every

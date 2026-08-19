@@ -129,15 +129,16 @@ pass-2 tables (`atomistic_protostructure_v1`, `atomistic_prototype_v1`, `core_ru
 `cod_canonicalization_v1`) are stored as on-demand internal tables, exactly like pass 1's
 `cod_structure_import`. They are deliberately kept out of the entry declaration: declaring
 them would make the OPTIMADE server try to serve families that have no served definition
-yet, and would break DuckDB's parallel bulk import (whose finalize references every
-declared table). Because the declaration is unchanged, databases built by an earlier
-`build-cod` remain readable -- no rebuild is required.
+yet (serving is out of scope for now); a minimal declaration is the right default anyway.
+Because the declaration is unchanged, databases built by an earlier `build-cod` remain
+readable -- no rebuild is required.
 
 ## DuckDB caveats
 
-- The parallel bulk import's `deferred` finalize mis-counts promoted roots on DuckDB (an
-  upstream httk-store bug), so the DuckDB import uses the equivalent `parity` finalize
-  automatically; SQLite keeps the lower-memory `deferred` finalize.
+- Both passes use the low-memory `deferred` bulk finalize on every engine. (Two httk-store
+  DuckDB defects that once forced a workaround here -- a promoted-root miscount in the
+  deferred finalize, and a parallel finalize that queried declared-but-unwritten tables --
+  are now fixed upstream, so no per-engine finalize special-casing remains.)
 - DuckDB's parallel bulk ingest builds one index-friendly layout at finalize time; on very
   large imports its index strategy is less aggressive than SQLite's.
 
