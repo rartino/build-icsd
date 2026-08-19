@@ -6,7 +6,7 @@ so pass 1 (import) and pass 2 (canonicalization) must construct exactly the same
 and runs.
 
 Only the OPTIMADE ``structures`` family is declared. The pass-2 records
-(``atomistic_protostructure_v1``, ``atomistic_prototype_v1``, ``core_run`` and
+(``atomistic_protostructure_v1``, ``atomistic_prototype``, ``core_run`` and
 ``cod_canonicalization_v1``) are stored as on-demand internal tables, exactly like the
 pass-1 ``cod_structure_import`` table: they need no entry declaration to be saved or
 queried. Keeping them out of the entry declaration is deliberate -- adding them would make
