@@ -14,7 +14,7 @@ The build is two passes over one database:
    recommends it.
 2. **Canonicalize** (`build-cod-canonicalize`) canonicalizes each imported structure,
    derives its `Protostructure` and `Prototype`, and records the canonical structure, a
-   provenance `Run`, and a `cod_canonicalization_v1` row linking them back to the import.
+   provenance `Run`, and a `cod_canonicalization` row linking them back to the import.
 
 Install the builder and server:
 
@@ -44,7 +44,7 @@ build-cod-canonicalize database/cod.duckdb --workers 8 --tolerance 0.01
 ```
 
 The pass is **resumable through the database itself**: it processes only import rows
-that hold a structure and have no `cod_canonicalization_v1` row yet, so interrupting it
+that hold a structure and have no `cod_canonicalization` row yet, so interrupting it
 and rerunning is safe and never duplicates work. `--retry-errors` reprocesses rows that
 previously failed. Options: `--workers`, `--limit`, `--progress-every`, `--chunk` (rows
 per committed transaction, default 200), `--tolerance` and `--lift` (both forwarded to
@@ -56,7 +56,7 @@ main process commits results in chunked transactions.
 
 ## The headline queries
 
-"How many protostructures are in COD" is the row count of `atomistic_protostructure_v1`;
+"How many protostructures are in COD" is the row count of `atomistic_protostructure`;
 "with spacegroup IT number > 2" is the indexed filter on it. Either structure version and
 the which-yielded-which linkage are directly queryable.
 
@@ -80,26 +80,26 @@ As SQL (the same table and column names on both engines). The protostructure tab
 content-id deduplicated and never accumulates superseded rows, so a plain count is exact:
 
 ```sql
-SELECT COUNT(*) FROM atomistic_protostructure_v1;
-SELECT COUNT(*) FROM atomistic_protostructure_v1 WHERE spacegroup_it_number > 2;
+SELECT COUNT(*) FROM atomistic_protostructure;
+SELECT COUNT(*) FROM atomistic_protostructure WHERE spacegroup_it_number > 2;
 ```
 
 **Counting canonicalized imports (retry-proof).** `--retry-errors` supersedes an error row
-with `store.replace`, which keeps the old row queryable, so `cod_canonicalization_v1` can
+with `store.replace`, which keeps the old row queryable, so `cod_canonicalization` can
 hold superseded lineage rows after retries -- a raw `COUNT(*)` over it over-counts. The
 blessed current-state count is one success per source:
 
 ```sql
-SELECT COUNT(DISTINCT source) FROM cod_canonicalization_v1 WHERE error IS NULL;
+SELECT COUNT(DISTINCT source) FROM cod_canonicalization WHERE error IS NULL;
 ```
 
 The original and canonical structures and their provenance -- the two versions and the
-which-yielded-which linkage -- are on each `cod_canonicalization_v1` row directly (the same
+which-yielded-which linkage -- are on each `cod_canonicalization` row directly (the same
 `WHERE error IS NULL` keeps this to current-state rows):
 
 ```sql
 SELECT source, original_content_id, canonical_content_id, protostructure_content_id
-FROM cod_canonicalization_v1
+FROM cod_canonicalization
 WHERE error IS NULL;
 ```
 
@@ -125,8 +125,8 @@ would cross-product them, and would need a per-label correlated subquery instead
 The store's entry declaration is stamped into the database on first open and byte-checked
 on reopen, so both passes open the store with the same declaration
 (`build_cod.layout.entry_records`). Only the OPTIMADE `structures` family is declared; the
-pass-2 tables (`atomistic_protostructure_v1`, `atomistic_prototype_v1`, `core_run`,
-`cod_canonicalization_v1`) are stored as on-demand internal tables, exactly like pass 1's
+pass-2 tables (`atomistic_protostructure`, `atomistic_prototype`, `core_run`,
+`cod_canonicalization`) are stored as on-demand internal tables, exactly like pass 1's
 `cod_structure_import`. They are deliberately kept out of the entry declaration: declaring
 them would make the OPTIMADE server try to serve families that have no served definition
 yet (serving is out of scope for now); a minimal declaration is the right default anyway.

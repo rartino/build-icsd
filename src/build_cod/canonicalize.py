@@ -1,7 +1,7 @@
 """Pass 2: canonicalize imported structures and derive prototypes and protostructures.
 
 Pass 1 (``build_cod.cli``) imports every COD CIF into ``cod_structure_import`` rows.
-This pass reads each import that holds a structure and has no ``cod_canonicalization_v1``
+This pass reads each import that holds a structure and has no ``cod_canonicalization``
 row yet (that anti-join is the resume mechanism: interrupting and rerunning is safe and
 duplicate-free), canonicalizes it with :func:`~httk.atomistic.canonical_asu`, derives its
 ``Protostructure`` and ``Prototype``, and records the canonical structure, the two derived

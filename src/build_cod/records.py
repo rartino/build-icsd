@@ -114,8 +114,8 @@ class CanonicalizationRecord:
     """
 
     __httk_storage__: ClassVar[StorageInfo] = StorageInfo(
-        storage_name="cod_canonicalization_v1",
-        identity_name="cod_canonicalization_v1",
+        storage_name="cod_canonicalization",
+        identity_name="cod_canonicalization",
         indexes=(("source",), ("protostructure_content_id",)),
     )
 
