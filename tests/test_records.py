@@ -31,6 +31,11 @@ def test_structure_import_retries_an_advertised_autocorrect(tmp_path: Path, monk
     path = tmp_path / "repairable.cif"
     path.touch()
     corrected = object()
+    load_calls: list[tuple[object, dict[str, object]]] = []
+
+    def fake_load(source: object, **options: object) -> tuple[object, dict[str, object]]:
+        load_calls.append((source, options))
+        return source, options
 
     class RepairableView:
         def __init__(self, source: object) -> None:
@@ -38,11 +43,11 @@ def test_structure_import_retries_an_advertised_autocorrect(tmp_path: Path, monk
 
         def unview(self) -> object:
             if self.source == path:
-                raise ValueError("Remedy: load(..., autocorrect=True)")
+                raise ValueError("Remedy: load(..., repair=True)")
             return corrected
 
     monkeypatch.setattr(records, "ASUStructureView", RepairableView)
-    monkeypatch.setattr(records, "load", lambda source, **options: (source, options))
+    monkeypatch.setattr(records, "load", fake_load)
     monkeypatch.setattr(records, "content_id", lambda *args, **kwargs: "content-id")
 
     projected = records.StructureImportRecord.__httk_project__(path)
@@ -51,3 +56,4 @@ def test_structure_import_retries_an_advertised_autocorrect(tmp_path: Path, monk
     assert projected["error"] is None
     assert projected["autocorrect_attempted"] is True
     assert projected["autocorrected"] is True
+    assert load_calls == [(path, {"repair": True})]

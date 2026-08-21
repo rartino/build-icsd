@@ -10,7 +10,7 @@ The build is two passes over one database:
 1. **Import** (`build-cod`) reads every CIF into a `cod_structure_import` row.
    Successful rows reference the promoted asymmetric-unit structure; failed rows
    retain the exception and any collected warning reports, so one malformed CIF does
-   not abort the build. Autocorrect is retried only when the strict reader explicitly
+   not abort the build. Repair is retried only when the strict reader explicitly
    recommends it.
 2. **Canonicalize** (`build-cod-canonicalize`) canonicalizes each imported structure,
    derives its `Protostructure` and `Prototype`, and records the canonical structure, a

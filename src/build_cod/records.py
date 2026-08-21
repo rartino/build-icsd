@@ -65,10 +65,10 @@ class StructureImportRecord:
                 structure = ASUStructureView(path).unview()
                 content_id(structure, as_record=ASUStructureRecord)
             except Exception as error:  # noqa: BLE001 - one bad external file must become a record, not abort the build
-                if isinstance(error, ValueError) and "autocorrect=True" in str(error):
+                if isinstance(error, ValueError) and "repair=True" in str(error):
                     autocorrect_attempted = True
                     try:
-                        structure = ASUStructureView(load(path, autocorrect=True)).unview()
+                        structure = ASUStructureView(load(path, repair=True)).unview()
                         content_id(structure, as_record=ASUStructureRecord)
                     except Exception as autocorrect_error:  # noqa: BLE001 - retain the final per-file failure
                         structure = None

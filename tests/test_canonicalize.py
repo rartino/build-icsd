@@ -50,7 +50,7 @@ Cl3 Cl 0.000000 0.500000 0.000000
 Cl4 Cl 0.000000 0.000000 0.500000
 """
 
-# Two different species co-located: the strict reader recommends autocorrect, which
+# Two different species co-located: the strict reader recommends repair, which
 # keeps the first site; the import row is retained with autocorrected=True.
 AUTOCORRECT = """data_autoc
 _cell_length_a 4.000000
