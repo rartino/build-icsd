@@ -4,6 +4,7 @@ from pathlib import Path
 from starlette.testclient import TestClient
 
 from build_cod.cli import main
+from build_cod.records import StructureImportRequest
 from serve_cod_optimade.cli import main as serve_main
 
 
@@ -79,3 +80,41 @@ C1
     assert serve_main(["--database", str(output), "--port", "8123"]) == 0
     assert responses[0].status_code == 200
     assert responses[0].json()["meta"]["data_available"] == 1
+
+
+def test_build_cod_cli_no_filter_reaches_worker_request(tmp_path: Path, monkeypatch) -> None:
+    cod = tmp_path / "COD" / "cif"
+    cod.mkdir(parents=True)
+    path = cod / "1.cif"
+    path.touch()
+    requests = []
+
+    class FakeBulk:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def save(self, request, **kwargs):
+            requests.append(request)
+
+    class FakeStore:
+        def __init__(self, backend, **kwargs):
+            pass
+
+        def bulk_ingest(self, **kwargs):
+            return FakeBulk()
+
+    class FakeBackend:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr("build_cod.cli.Backend.sqlite", lambda output: FakeBackend())
+    monkeypatch.setattr("build_cod.cli.SqlStore", FakeStore)
+
+    assert main([str(cod.parent), "--format", "sqlite", "--output", str(tmp_path / "out.sqlite"), "--no-filter"]) == 0
+    assert requests == [StructureImportRequest(path, filter_enabled=False)]

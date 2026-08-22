@@ -9,7 +9,7 @@ from httk.atomistic import ASUStructureRecord
 from httk.store import Backend, SqlStore
 
 from build_cod.layout import entry_records
-from build_cod.records import StructureImportRecord
+from build_cod.records import StructureImportRecord, StructureImportRequest
 
 
 def _positive_int(value: str) -> int:
@@ -44,6 +44,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--workers", type=_positive_int, default=_default_workers())
     parser.add_argument("--progress-every", type=_positive_int, default=1000)
+    parser.add_argument("--no-filter", action="store_true", help="import journal-blacklisted and oversized structures")
     return parser
 
 
@@ -93,7 +94,11 @@ def main(argv: list[str] | None = None) -> int:
             chunk_size=2000,
         ) as bulk:
             for path in paths:
-                bulk.save(path, as_record=StructureImportRecord, promote=ASUStructureRecord)
+                bulk.save(
+                    StructureImportRequest(path, filter_enabled=not args.no_filter),
+                    as_record=StructureImportRecord,
+                    promote=ASUStructureRecord,
+                )
                 submitted += 1
                 if submitted % args.progress_every == 0:
                     _report_progress(submitted, len(paths), started)

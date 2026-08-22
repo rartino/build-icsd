@@ -10,8 +10,12 @@ The build is two passes over one database:
 1. **Import** (`build-cod`) reads every CIF into a `cod_structure_import` row.
    Successful rows reference the promoted asymmetric-unit structure; failed rows
    retain the exception and any collected warning reports, so one malformed CIF does
-   not abort the build. Repair is retried only when the strict reader explicitly
-   recommends it.
+   not abort the build. By default, the import excludes exact matches for four
+   molecular-chemistry journals and structures whose parsed primitive cell has more
+   than 1,000 sites; excluded files remain as audit rows. Repair is retried only when
+   the strict reader explicitly recommends it.
+   Exclusions use the existing `error` column with an `excluded: ` prefix, so they can be
+   counted without a schema change: `SELECT COUNT(*) FROM cod_structure_import WHERE error LIKE 'excluded:%'`.
 2. **Canonicalize** (`build-cod-canonicalize`) canonicalizes each imported structure,
    derives its `Protostructure` and `Prototype`, and records the canonical structure, a
    provenance `Run`, and a `cod_canonicalization` row linking them back to the import.
@@ -31,6 +35,8 @@ DuckDB is the default format; SQLite remains available with `--format sqlite`. U
 build-cod /path/to/DATA/COD --output database/cod.duckdb
 build-cod /path/to/DATA/COD --format sqlite --output database/cod.sqlite
 COD_PATH=/path/to/DATA/COD build-cod --workers 4 --progress-every 1000
+# Disable both import filters:
+build-cod /path/to/DATA/COD --no-filter
 ```
 
 DuckDB support installs with `python -m pip install '.[duckdb]'` (the `duckdb` and
@@ -152,4 +158,5 @@ make build
 make canonicalize
 make serve
 make build FORMAT=sqlite WORKERS=4 PROGRESS_EVERY=1000
+make build FILTER=0  # disable the journal and primitive-site filters
 ```
