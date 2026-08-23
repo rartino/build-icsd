@@ -110,6 +110,32 @@ def test_structure_import_site_limit_is_strict(tmp_path: Path, monkeypatch, site
     records.StructureImportRecord(**projected)
 
 
+def test_primitive_site_count_collapses_assembly_alternatives() -> None:
+    class Coordinate:
+        def __init__(self, values: tuple[int, int, int]) -> None:
+            self.values = values
+
+        def to_fractions(self) -> tuple[int, int, int]:
+            return self.values
+
+    structure = SimpleNamespace(
+        assemblies=(object(),),
+        spacegroup=SimpleNamespace(centering_translations=(object(), object())),
+        expand_sites=lambda: SimpleNamespace(
+            reduced_coords=[
+                Coordinate((0, 0, 0)),
+                Coordinate((0, 0, 0)),
+                Coordinate((1, 1, 1)),
+                Coordinate((1, 1, 1)),
+                Coordinate((2, 2, 2)),
+                Coordinate((3, 3, 3)),
+            ]
+        ),
+    )
+
+    assert records._primitive_site_count(structure) == 2
+
+
 @pytest.mark.parametrize(
     "value, expected",
     [

@@ -135,7 +135,7 @@ def _journal_exclusion(path: Path) -> str | None:
 
 def _site_exclusion(structure: ASUStructure, path: Path) -> str | None:
     try:
-        count = len(primitive_cell(structure).structure.sites)
+        count = _primitive_site_count(structure)
     except Exception as error:  # noqa: BLE001 - inability to size must retain the structure
         logging.getLogger(__name__).warning(
             "could not determine primitive site count for %s; retaining structure: %s",
@@ -147,6 +147,18 @@ def _site_exclusion(structure: ASUStructure, path: Path) -> str | None:
     if count > _MAX_PRIMITIVE_SITES:
         return f"primitive site count {count} exceeds limit {_MAX_PRIMITIVE_SITES}"
     return None
+
+
+def _primitive_site_count(structure: ASUStructure) -> int:
+    """Count spatial sites in the primitive cell without expanding assembly correlations."""
+    if getattr(structure, "assemblies", None) is None:
+        return len(primitive_cell(structure).structure.sites)
+    coordinates = {tuple(site.to_fractions()) for site in structure.expand_sites().reduced_coords}
+    centring = len(structure.spacegroup.centering_translations)
+    count, remainder = divmod(len(coordinates), centring)
+    if remainder:
+        raise ValueError("assembly spatial-site count is incompatible with the space-group centring")
+    return count
 
 
 def _report_json(record: logging.LogRecord) -> str:
