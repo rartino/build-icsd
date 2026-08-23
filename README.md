@@ -47,7 +47,10 @@ build-cod /path/to/DATA/COD --no-filter
 Pass 1 is resumable by exact source path: previously successful, failed, and excluded
 rows all count as committed. `--commit-every` controls the checkpoint size (default 200).
 Resume assumes the discovered input paths and filter setting are unchanged; use a fresh
-output when either changes.
+output when either changes. Progress reports include a continuously updated ETA timestamp
+and remaining duration, projected from the average throughput observed during the current
+invocation. On resume, previously committed rows reduce the remaining work but are not
+mistaken for work performed during the new timing interval.
 
 DuckDB support installs with `python -m pip install '.[duckdb]'` (the `duckdb` and
 `parallel` extras).
@@ -68,7 +71,8 @@ per committed transaction, default 200), `--tolerance` and `--lift` (both forwar
 finished). The format is inferred from the file suffix, or forced with `--format`.
 
 Compute (recognition, lifting, derivation) runs in a process pool; a single writer in the
-main process commits results in chunked transactions.
+main process commits results in chunked transactions. Its progress reports use the same
+continuously updated ETA prognosis as pass 1.
 
 Pass 2 reconstructs the imported ASUStructure, calls `canonical_asu` once (forwarding
 `--tolerance`, `--lift`, and `preserve_chirality=True`). It stores that chirality-preserving

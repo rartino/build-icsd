@@ -43,6 +43,7 @@ from httk.core.storage import content_id
 from httk.store import Backend, SqlStore
 
 from build_cod.layout import entry_records
+from build_cod.progress import CompletionPrognosis
 from build_cod.records import CanonicalizationRecord, StructureImportRecord, _error_text
 
 WORKFLOW_URI = "https://schemas.httk.org/defs/v0.1/workflows/cod-canonicalization"
@@ -292,6 +293,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.limit is not None:
             work = work[: args.limit]
         total = len(work)
+        prognosis = CompletionPrognosis(total)
         print(f"Canonicalizing {total} imported structures with {args.workers} worker(s)...", flush=True)
 
         with ProcessPoolExecutor(max_workers=args.workers) as pool:
@@ -309,9 +311,10 @@ def main(argv: list[str] | None = None) -> int:
                     batch = []
                 processed += 1
                 if processed % args.progress_every == 0:
-                    elapsed = max(time.monotonic() - started, 1e-9)
+                    progress = prognosis.snapshot(processed)
                     print(
-                        f"Canonicalized {processed}/{total}; elapsed {elapsed:.1f}s; rate {processed / elapsed:.1f}/s",
+                        f"Canonicalized {processed}/{total}; elapsed {progress.elapsed:.1f}s; "
+                        f"rate {progress.rate:.1f}/s; {progress.prognosis}",
                         flush=True,
                     )
             if batch:

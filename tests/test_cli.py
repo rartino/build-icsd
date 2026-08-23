@@ -119,6 +119,8 @@ C1
         assert "_atom_site_fract_x, _atom_site_fract_y, _atom_site_fract_z" in error
     captured = capsys.readouterr()
     assert "Committed 2/2 CIF imports" in captured.out
+    assert "ETA " in captured.out
+    assert " remaining)" in captured.out
     assert "Completed 2/2 CIF imports" in captured.out
     assert "2.cif: ERROR:" in captured.err
 

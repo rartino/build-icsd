@@ -14,6 +14,7 @@ from httk.store import Backend, SqlStore
 
 from build_cod.canonicalize import _bounded_results
 from build_cod.layout import entry_records
+from build_cod.progress import CompletionPrognosis
 from build_cod.records import (
     StructureImportRecord,
     StructureImportRequest,
@@ -59,10 +60,11 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _report_progress(committed: int, total: int, started: float) -> None:
-    elapsed = max(time.monotonic() - started, 1e-9)
+def _report_progress(committed: int, prognosis: CompletionPrognosis) -> None:
+    progress = prognosis.snapshot(committed)
     print(
-        f"Committed {committed}/{total} CIF imports; elapsed {elapsed:.1f}s; rate {committed / elapsed:.1f}/s",
+        f"Committed {committed}/{prognosis.total} CIF imports; elapsed {progress.elapsed:.1f}s; "
+        f"rate {progress.rate:.1f}/s; {progress.prognosis}",
         flush=True,
     )
 
@@ -137,6 +139,7 @@ def main(argv: list[str] | None = None) -> int:
         already = len(existing & current)
         print(f"Already committed {already}/{len(paths)} current CIF imports.", flush=True)
         pending = tuple(path for path in paths if str(path) not in existing)
+        prognosis = CompletionPrognosis(len(paths), completed_at_start=already)
         if pending:
             processed = 0
             committed = already
@@ -160,7 +163,7 @@ def main(argv: list[str] | None = None) -> int:
                         previous_committed = committed
                         committed += 1
                         if committed // args.progress_every > previous_committed // args.progress_every:
-                            _report_progress(committed, len(paths), started)
+                            _report_progress(committed, prognosis)
                         batch: list[_StructureImportWorkerResult] = []
                     else:
                         batch = [result]
@@ -172,7 +175,7 @@ def main(argv: list[str] | None = None) -> int:
                             previous_committed = committed
                             committed += len(batch)
                             if committed // args.progress_every > previous_committed // args.progress_every:
-                                _report_progress(committed, len(paths), started)
+                                _report_progress(committed, prognosis)
                             batch = []
                     if batch:
                         _commit_batch(store, batch)
@@ -180,7 +183,7 @@ def main(argv: list[str] | None = None) -> int:
                         previous_committed = committed
                         committed += len(batch)
                         if committed // args.progress_every > previous_committed // args.progress_every:
-                            _report_progress(committed, len(paths), started)
+                            _report_progress(committed, prognosis)
                     print("Finalizing database...", flush=True)
         else:
             processed = 0
