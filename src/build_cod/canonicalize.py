@@ -25,6 +25,8 @@ from typing import Any
 from httk.atomistic import (
     ASUStructure,
     ASUStructureView,
+    ProtostructureView,
+    PrototemplateView,
     canonical_asu,
 )
 from httk.atomistic.storage.records import (
@@ -64,9 +66,9 @@ def _canonicalize_one(item: tuple[str, Any, str, float | None, bool]) -> _Result
     source, structure_record, original_cid, tolerance, lift = item
     try:
         structure = ASUStructureView(structure_record).unview()
-        protostructure_record = _protostructure_record_from_value(structure.canonical_protostructure())
-        prototemplate_record = _prototemplate_record_from_value(structure.canonical_prototemplate())
-        canonical = canonical_asu(structure, tolerance=tolerance, lift=lift)
+        canonical = canonical_asu(structure, tolerance=tolerance, lift=lift, preserve_chirality=False)
+        protostructure_record = _protostructure_record_from_value(ProtostructureView(canonical).unview())
+        prototemplate_record = _prototemplate_record_from_value(PrototemplateView(canonical).unview())
         return _Result(
             source,
             original_cid,

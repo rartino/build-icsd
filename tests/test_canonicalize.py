@@ -196,11 +196,23 @@ def test_two_pass_import_and_canonicalization(tmp_path: Path, fmt: str) -> None:
             """,
             (WORKFLOW_URI,),
         ).fetchall()
+        root_rows = connection.execute(
+            """
+            SELECT c.original_content_id, c.canonical_content_id,
+                   original._httk_role, canonical._httk_role
+            FROM cod_canonicalization c
+            JOIN atomistic_asu_structure original ON original.content_id = c.original_content_id
+            JOIN atomistic_asu_structure canonical ON canonical.content_id = c.canonical_content_id
+            WHERE c.error IS NULL
+            """
+        ).fetchall()
         connection.close()
         run_pairs = {(original, canonical) for original, canonical in pairs}
         record_pairs = {(row.original_content_id, row.canonical_content_id) for row in rows}
         assert run_pairs == record_pairs
         assert len(run_pairs) == 2  # deduplicated: the duplicate crystal shares one run
+        assert {(original, canonical) for original, canonical, *_roles in root_rows} == record_pairs
+        assert all(original_role == canonical_role == 1 for *_ids, original_role, canonical_role in root_rows)
 
 
 @pytest.mark.parametrize("fmt", ["sqlite", "duckdb"])
@@ -254,6 +266,73 @@ def test_worker_records_a_canonicalization_error(tmp_path: Path) -> None:
         assert len(rows) == 1
         assert rows[0].error == result.error
         assert rows[0].canonical_content_id is None
+
+
+def test_worker_canonicalizes_once_and_derives_from_that_asu(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    pytest.importorskip("spglib")
+    from httk.atomistic import ProtostructureView, PrototemplateView
+    from httk.atomistic.symmetry import canonical as atomistic_canonical_module
+    from httk.core.storage import content_id
+
+    import build_cod.canonicalize as canonicalize_module
+
+    cod = _fixture(tmp_path)
+    database = tmp_path / "cod.sqlite"
+    assert build_main([str(cod), "--format", "sqlite", "--output", str(database), "--workers", "1"]) == 0
+
+    backend, SqlStore = _open_store(database, "sqlite")
+    with backend:
+        store = SqlStore(backend, entry_records=entry_records())
+        searcher = store.searcher()
+        variable = searcher.variable(StructureImportRecord)
+        searcher.add(variable.structure != None)
+        searcher.output(variable.source, "source")
+        searcher.output(variable.sid, "sid")
+        (source, sid), _names = next(iter(searcher))
+        imported = store.fetch(StructureImportRecord, sid, eager=True)
+
+        real_canonical_asu = canonicalize_module.canonical_asu
+        canonical_calls = []
+
+        def spy_canonical_asu(structure, **kwargs):
+            canonical = real_canonical_asu(structure, **kwargs)
+            canonical_calls.append((structure, canonical, kwargs))
+            return canonical
+
+        def reject_recanonicalization(*args, **kwargs):
+            raise AssertionError("derivation view recanonicalized the ASU")
+
+        proto_view_inputs = []
+        template_view_inputs = []
+        real_proto_view = ProtostructureView
+        real_template_view = PrototemplateView
+
+        def spy_proto_view(obj, **kwargs):
+            proto_view_inputs.append(obj)
+            return real_proto_view(obj, **kwargs)
+
+        def spy_template_view(obj, **kwargs):
+            template_view_inputs.append(obj)
+            return real_template_view(obj, **kwargs)
+
+        monkeypatch.setattr(canonicalize_module, "canonical_asu", spy_canonical_asu)
+        monkeypatch.setattr(atomistic_canonical_module, "canonical_asu", reject_recanonicalization)
+        monkeypatch.setattr(canonicalize_module, "ProtostructureView", spy_proto_view)
+        monkeypatch.setattr(canonicalize_module, "PrototemplateView", spy_template_view)
+
+        result = _canonicalize_one((source, imported.structure, imported.structure.id, 0.01, False))
+
+    assert result.error is None
+    assert len(canonical_calls) == 1
+    original, canonical, kwargs = canonical_calls[0]
+    assert isinstance(original, type(result.canonical))
+    assert kwargs == {"tolerance": 0.01, "lift": False, "preserve_chirality": False}
+    assert result.canonical is canonical
+    assert proto_view_inputs == [canonical]
+    assert template_view_inputs == [canonical]
+    assert result.canonical_content_id == content_id(canonical)
+    assert result.protostructure_content_id == result.protostructure_record.id
+    assert result.prototemplate_content_id == result.prototemplate_record.id
 
 
 def test_bounded_results_keeps_input_consumption_within_the_window() -> None:

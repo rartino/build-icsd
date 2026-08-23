@@ -70,10 +70,10 @@ finished). The format is inferred from the file suffix, or forced with `--format
 Compute (recognition, lifting, derivation) runs in a process pool; a single writer in the
 main process commits results in chunked transactions.
 
-The catalog values come from `Structure.canonical_protostructure()` and
-`Structure.canonical_prototemplate()` on the reconstructed imported structure. Those
-no-argument methods use their own defaults (`preserve_chirality=False`); `--tolerance` and
-`--lift` apply only to the separately stored canonical ASU.
+Pass 2 reconstructs the imported ASUStructure, calls `canonical_asu` once (forwarding
+`--tolerance`, `--lift`, and `preserve_chirality=False`), and derives both catalog values
+from that exact canonical ASU. Existing completed databases retain their old pass-2 results;
+rebuild them to apply this single-call semantics.
 
 ## The headline queries
 
