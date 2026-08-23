@@ -142,12 +142,12 @@ def _iter_inputs(
         yield retry_sid, (source, imported.structure, imported.structure.id, tolerance, lift)
 
 
-def _bounded_results(
+def _bounded_results[TagT, InputT, ResultT](
     pool: Executor,
-    fn: Callable[[Any], _Result],
-    tagged_inputs: Iterable[tuple[int | None, Any]],
+    fn: Callable[[InputT], ResultT],
+    tagged_inputs: Iterable[tuple[TagT, InputT]],
     window: int,
-) -> Iterator[tuple[int | None, _Result]]:
+) -> Iterator[tuple[TagT, ResultT]]:
     """Drive ``fn`` over ``tagged_inputs`` keeping at most ``window`` submissions in flight.
 
     Unlike ``Executor.map`` (which submits the whole iterable up front), this pulls one new
@@ -155,7 +155,7 @@ def _bounded_results(
     ``window`` items ahead of the results yielded.
     """
     inputs = iter(tagged_inputs)
-    pending: dict[Any, int | None] = {}
+    pending: dict[Any, TagT] = {}
     for tag, item in islice(inputs, window):
         pending[pool.submit(fn, item)] = tag
     while pending:

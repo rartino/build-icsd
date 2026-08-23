@@ -25,11 +25,28 @@ _FILTER_JOURNALS = {
 
 
 @dataclass(frozen=True)
-class StructureImportRequest:
+class _StructureImportSource:
+    """Marker for values that can be projected as a structure import."""
+
+
+@dataclass(frozen=True)
+class StructureImportRequest(_StructureImportSource):
     """The source and filter setting sent to a pass-1 worker."""
 
     path: Path
     filter_enabled: bool = True
+
+
+@dataclass(frozen=True)
+class _StructureImportWorkerResult(_StructureImportSource):
+    """Picklable pass-1 worker outcome."""
+
+    source: str
+    structure: ASUStructure | None
+    reports: tuple[str, ...]
+    error: str | None
+    autocorrect_attempted: bool
+    autocorrected: bool
 
 
 def _normalize_journal(value: str) -> str:
@@ -142,6 +159,57 @@ def _error_text(error: Exception) -> str:
     return f"{type(error).__module__}.{type(error).__qualname__}: {error}"
 
 
+def _read_structure(request: StructureImportRequest) -> _StructureImportWorkerResult:
+    """Read one CIF in a process worker and retain diagnostics or failure."""
+    path = request.path
+    structure = None
+    error_text = None
+    exclusion_reason = _journal_exclusion(path) if request.filter_enabled else None
+    autocorrect_attempted = False
+    autocorrected = False
+    with collect_reports(level="info") as reports:
+        try:
+            if exclusion_reason is None:
+                structure = ASUStructureView(path).unview()
+                if request.filter_enabled:
+                    exclusion_reason = _site_exclusion(structure, path)
+                if exclusion_reason is None:
+                    content_id(structure, as_record=ASUStructureRecord)
+                else:
+                    structure = None
+                    error_text = f"excluded: {exclusion_reason}"
+            else:
+                error_text = f"excluded: {exclusion_reason}"
+        except Exception as error:  # noqa: BLE001 - one bad external file must become a record, not abort the build
+            if isinstance(error, ValueError) and "repair=True" in str(error):
+                autocorrect_attempted = True
+                try:
+                    structure = ASUStructureView(load(path, repair=True)).unview()
+                    if request.filter_enabled:
+                        exclusion_reason = _site_exclusion(structure, path)
+                    if exclusion_reason is None:
+                        content_id(structure, as_record=ASUStructureRecord)
+                    else:
+                        structure = None
+                        error_text = f"excluded: {exclusion_reason}"
+                except Exception as autocorrect_error:  # noqa: BLE001 - retain the final per-file failure
+                    structure = None
+                    exclusion_reason = None
+                    error_text = _error_text(autocorrect_error)
+                else:
+                    autocorrected = structure is not None
+            else:
+                error_text = _error_text(error)
+    return _StructureImportWorkerResult(
+        str(path),
+        structure,
+        tuple(_report_json(record) for record in reports.records),
+        error_text,
+        autocorrect_attempted,
+        autocorrected,
+    )
+
+
 @dataclass(frozen=True)
 class StructureImportRecord:
     """Record one source path and its imported or failed ASU."""
@@ -151,7 +219,7 @@ class StructureImportRecord:
         identity_name="cod_structure_import",
         indexes=(("source",), ("autocorrected",)),
     )
-    __httk_canonical_source__: ClassVar[type[StructureImportRequest]] = StructureImportRequest
+    __httk_canonical_source__: ClassVar[type[_StructureImportSource]] = _StructureImportSource
 
     source: str
     structure: ASUStructureRecord | None
@@ -171,54 +239,16 @@ class StructureImportRecord:
         object.__setattr__(self, "reports", reports)
 
     @classmethod
-    def __httk_project__(cls, request: StructureImportRequest) -> Mapping[str, object]:
-        """Read one path inside its bulk worker and retain warnings or failure."""
-        path = request.path
-        structure = None
-        error_text = None
-        exclusion_reason = _journal_exclusion(path) if request.filter_enabled else None
-        autocorrect_attempted = False
-        autocorrected = False
-        with collect_reports(level="warning") as reports:
-            try:
-                if exclusion_reason is None:
-                    structure = ASUStructureView(path).unview()
-                    if request.filter_enabled:
-                        exclusion_reason = _site_exclusion(structure, path)
-                    if exclusion_reason is None:
-                        content_id(structure, as_record=ASUStructureRecord)
-                    else:
-                        structure = None
-                        error_text = f"excluded: {exclusion_reason}"
-                else:
-                    error_text = f"excluded: {exclusion_reason}"
-            except Exception as error:  # noqa: BLE001 - one bad external file must become a record, not abort the build
-                if isinstance(error, ValueError) and "repair=True" in str(error):
-                    autocorrect_attempted = True
-                    try:
-                        structure = ASUStructureView(load(path, repair=True)).unview()
-                        if request.filter_enabled:
-                            exclusion_reason = _site_exclusion(structure, path)
-                        if exclusion_reason is None:
-                            content_id(structure, as_record=ASUStructureRecord)
-                        else:
-                            structure = None
-                            error_text = f"excluded: {exclusion_reason}"
-                    except Exception as autocorrect_error:  # noqa: BLE001 - retain the final per-file failure
-                        structure = None
-                        exclusion_reason = None
-                        error_text = _error_text(autocorrect_error)
-                    else:
-                        autocorrected = structure is not None
-                else:
-                    error_text = _error_text(error)
+    def __httk_project__(cls, source: _StructureImportSource) -> Mapping[str, object]:
+        """Project a request or an already-read worker outcome."""
+        result = _read_structure(source) if isinstance(source, StructureImportRequest) else source
         return {
-            "source": str(path),
-            "structure": structure,
-            "reports": tuple(_report_json(record) for record in reports.records),
-            "error": error_text,
-            "autocorrect_attempted": autocorrect_attempted,
-            "autocorrected": autocorrected,
+            "source": result.source,
+            "structure": result.structure,
+            "reports": result.reports,
+            "error": result.error,
+            "autocorrect_attempted": result.autocorrect_attempted,
+            "autocorrected": result.autocorrected,
         }
 
 

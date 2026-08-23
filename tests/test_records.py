@@ -17,7 +17,9 @@ def test_structure_import_projection_collects_warning_and_error(tmp_path: Path, 
             assert source == path
 
         def unview(self) -> None:
+            logging.getLogger("httk.test").info("kept info", extra={"context": "cif"})
             logging.getLogger("httk.test").warning("kept warning", extra={"context": "cif"})
+            logging.getLogger("httk.test").error("kept error", extra={"context": "cif"})
             raise ValueError("broken input")
 
     monkeypatch.setattr(records, "ASUStructureView", BrokenView)
@@ -26,8 +28,12 @@ def test_structure_import_projection_collects_warning_and_error(tmp_path: Path, 
     assert projected["structure"] is None
     assert projected["error"] == "builtins.ValueError: broken input"
     assert projected["autocorrect_attempted"] is False
-    report = json.loads(projected["reports"][0])
-    assert report == {"context": "cif", "level": "warning", "logger": "httk.test", "message": "kept warning"}
+    reports = [json.loads(report) for report in projected["reports"]]
+    assert [(report["level"], report["message"]) for report in reports] == [
+        ("info", "kept info"),
+        ("warning", "kept warning"),
+        ("error", "kept error"),
+    ]
 
 
 def test_structure_import_retries_an_advertised_autocorrect(tmp_path: Path, monkeypatch) -> None:

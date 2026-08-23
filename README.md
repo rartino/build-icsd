@@ -3,13 +3,13 @@
 Build a new DuckDB or SQLite httk-store database from a COD CIF tree, canonicalize
 its structures into a prototemplate/protostructure catalog, and serve it over OPTIMADE.
 The input may be `DATA/COD` (with a `cif/` directory) or a directory containing CIF
-files. Existing output files are never overwritten or appended to.
+files. Existing output files are reopened and resumed; an output is never overwritten.
 
 The build is two passes over one database:
 
-1. **Import** (`build-cod`) reads every CIF into a `cod_structure_import` row.
+1. **Import** (`build-cod`) reads each not-yet-recorded CIF into a `cod_structure_import` row.
    Successful rows reference the promoted asymmetric-unit structure; failed rows
-   retain the exception and any collected warning reports, so one malformed CIF does
+   retain the exception and any collected info, warning, and error reports, so one malformed CIF does
    not abort the build. By default, the import excludes exact matches for four
    molecular-chemistry journals and structures whose parsed primitive cell has more
    than 1,000 sites; excluded files remain as audit rows. Repair is retried only when
@@ -38,9 +38,16 @@ DuckDB is the default format; SQLite remains available with `--format sqlite`. U
 build-cod /path/to/DATA/COD --output database/cod.duckdb
 build-cod /path/to/DATA/COD --format sqlite --output database/cod.sqlite
 COD_PATH=/path/to/DATA/COD build-cod --workers 4 --progress-every 1000
+# Resume with bounded commits:
+build-cod /path/to/DATA/COD --output database/cod.duckdb --commit-every 200
 # Disable both import filters:
 build-cod /path/to/DATA/COD --no-filter
 ```
+
+Pass 1 is resumable by exact source path: previously successful, failed, and excluded
+rows all count as committed. `--commit-every` controls the checkpoint size (default 200).
+Resume assumes the discovered input paths and filter setting are unchanged; use a fresh
+output when either changes.
 
 DuckDB support installs with `python -m pip install '.[duckdb]'` (the `duckdb` and
 `parallel` extras).

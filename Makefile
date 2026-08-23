@@ -4,6 +4,7 @@ FORMAT ?= duckdb
 OUTPUT ?= database/cod.$(FORMAT)
 WORKERS ?= $(shell $(PYTHON) -c 'import os; print(os.cpu_count()//2 or 1)')
 PROGRESS_EVERY ?= 1000
+COMMIT_EVERY ?= 200
 FILTER ?= 1
 HOST ?= 127.0.0.1
 PORT ?= 8080
@@ -19,11 +20,11 @@ install:
 
 build:
 	mkdir -p database
-	PYTHONPATH="src$${PYTHONPATH:+:$${PYTHONPATH}}" COD_PATH="$(COD_PATH)" httk memguard --max-rss-gb 24 --as-gb 12 $(PYTHON) -m build_cod --format "$(FORMAT)" --output "$(OUTPUT)" --workers "$(WORKERS)" --progress-every "$(PROGRESS_EVERY)" $(FILTER_ARGS)
+	PYTHONPATH="src$${PYTHONPATH:+:$${PYTHONPATH}}" COD_PATH="$(COD_PATH)" httk memguard --max-rss-gb 24 --as-gb 12 $(PYTHON) -m build_cod --format "$(FORMAT)" --output "$(OUTPUT)" --workers "$(WORKERS)" --progress-every "$(PROGRESS_EVERY)" --commit-every "$(COMMIT_EVERY)" $(FILTER_ARGS)
 	$(MAKE) canonicalize
 
 canonicalize:
-	PYTHONPATH="src$${PYTHONPATH:+:$${PYTHONPATH}}" $(PYTHON) -m build_cod.canonicalize "$(OUTPUT)" --format "$(FORMAT)" --workers "$(WORKERS)" --progress-every "$(PROGRESS_EVERY)" --stats
+	PYTHONPATH="src$${PYTHONPATH:+:$${PYTHONPATH}}" $(PYTHON) -m build_cod.canonicalize "$(OUTPUT)" --format "$(FORMAT)" --workers "$(WORKERS)" --progress-every "$(PROGRESS_EVERY)" --chunk "$(COMMIT_EVERY)" --stats
 
 serve:
 	PYTHONPATH="src$${PYTHONPATH:+:$${PYTHONPATH}}" $(PYTHON) -m serve_cod_optimade --format "$(FORMAT)" --database "$(OUTPUT)" --host "$(HOST)" --port "$(PORT)"
