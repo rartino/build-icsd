@@ -268,7 +268,9 @@ def test_worker_records_a_canonicalization_error(tmp_path: Path) -> None:
         assert rows[0].canonical_content_id is None
 
 
-def test_worker_canonicalizes_once_and_derives_from_that_asu(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_worker_canonicalizes_once_then_normalizes_chirality_for_derivation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     pytest.importorskip("spglib")
     from httk.atomistic import ProtostructureView, PrototemplateView
     from httk.atomistic.symmetry import canonical as atomistic_canonical_module
@@ -293,6 +295,7 @@ def test_worker_canonicalizes_once_and_derives_from_that_asu(tmp_path: Path, mon
 
         real_canonical_asu = canonicalize_module.canonical_asu
         canonical_calls = []
+        chirality_calls = []
 
         def spy_canonical_asu(structure, **kwargs):
             canonical = real_canonical_asu(structure, **kwargs)
@@ -301,6 +304,13 @@ def test_worker_canonicalizes_once_and_derives_from_that_asu(tmp_path: Path, mon
 
         def reject_recanonicalization(*args, **kwargs):
             raise AssertionError("derivation view recanonicalized the ASU")
+
+        real_normalize_chirality = canonicalize_module.normalize_chirality
+
+        def spy_normalize_chirality(structure):
+            normalized = real_normalize_chirality(structure)
+            chirality_calls.append((structure, normalized))
+            return normalized
 
         proto_view_inputs = []
         template_view_inputs = []
@@ -316,6 +326,7 @@ def test_worker_canonicalizes_once_and_derives_from_that_asu(tmp_path: Path, mon
             return real_template_view(obj, **kwargs)
 
         monkeypatch.setattr(canonicalize_module, "canonical_asu", spy_canonical_asu)
+        monkeypatch.setattr(canonicalize_module, "normalize_chirality", spy_normalize_chirality)
         monkeypatch.setattr(atomistic_canonical_module, "canonical_asu", reject_recanonicalization)
         monkeypatch.setattr(canonicalize_module, "ProtostructureView", spy_proto_view)
         monkeypatch.setattr(canonicalize_module, "PrototemplateView", spy_template_view)
@@ -326,10 +337,12 @@ def test_worker_canonicalizes_once_and_derives_from_that_asu(tmp_path: Path, mon
     assert len(canonical_calls) == 1
     original, canonical, kwargs = canonical_calls[0]
     assert isinstance(original, type(result.canonical))
-    assert kwargs == {"tolerance": 0.01, "lift": False, "preserve_chirality": False}
+    assert kwargs == {"tolerance": 0.01, "lift": False, "preserve_chirality": True}
     assert result.canonical is canonical
-    assert proto_view_inputs == [canonical]
-    assert template_view_inputs == [canonical]
+    assert chirality_calls[0][0] is canonical
+    prototype_canonical = chirality_calls[0][1]
+    assert proto_view_inputs == [prototype_canonical]
+    assert template_view_inputs == [prototype_canonical]
     assert result.canonical_content_id == content_id(canonical)
     assert result.protostructure_content_id == result.protostructure_record.id
     assert result.prototemplate_content_id == result.prototemplate_record.id

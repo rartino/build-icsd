@@ -28,6 +28,7 @@ from httk.atomistic import (
     ProtostructureView,
     PrototemplateView,
     canonical_asu,
+    normalize_chirality,
 )
 from httk.atomistic.storage.records import (
     ProtostructureRecord,
@@ -66,9 +67,10 @@ def _canonicalize_one(item: tuple[str, Any, str, float | None, bool]) -> _Result
     source, structure_record, original_cid, tolerance, lift = item
     try:
         structure = ASUStructureView(structure_record).unview()
-        canonical = canonical_asu(structure, tolerance=tolerance, lift=lift, preserve_chirality=False)
-        protostructure_record = _protostructure_record_from_value(ProtostructureView(canonical).unview())
-        prototemplate_record = _prototemplate_record_from_value(PrototemplateView(canonical).unview())
+        canonical = canonical_asu(structure, tolerance=tolerance, lift=lift, preserve_chirality=True)
+        prototype_canonical = normalize_chirality(canonical)
+        protostructure_record = _protostructure_record_from_value(ProtostructureView(prototype_canonical).unview())
+        prototemplate_record = _prototemplate_record_from_value(PrototemplateView(prototype_canonical).unview())
         return _Result(
             source,
             original_cid,

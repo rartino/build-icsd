@@ -71,7 +71,8 @@ Compute (recognition, lifting, derivation) runs in a process pool; a single writ
 main process commits results in chunked transactions.
 
 Pass 2 reconstructs the imported ASUStructure, calls `canonical_asu` once (forwarding
-`--tolerance`, `--lift`, and `preserve_chirality=False`), and derives both catalog values
+`--tolerance`, `--lift`, and `preserve_chirality=True`). It stores that chirality-preserving
+canonical structure, then normalizes chirality before deriving both catalog values
 from that exact canonical ASU. Existing completed databases retain their old pass-2 results;
 rebuild them to apply this single-call semantics.
 
