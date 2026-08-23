@@ -156,7 +156,7 @@ def _report_json(record: logging.LogRecord) -> str:
 
 
 def _error_text(error: Exception) -> str:
-    return f"{type(error).__module__}.{type(error).__qualname__}: {error}"
+    return str(error)
 
 
 def _read_structure(request: StructureImportRequest) -> _StructureImportWorkerResult:

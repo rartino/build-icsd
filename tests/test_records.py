@@ -26,7 +26,7 @@ def test_structure_import_projection_collects_warning_and_error(tmp_path: Path, 
     projected = records.StructureImportRecord.__httk_project__(records.StructureImportRequest(path))
 
     assert projected["structure"] is None
-    assert projected["error"] == "builtins.ValueError: broken input"
+    assert projected["error"] == "broken input"
     assert projected["autocorrect_attempted"] is False
     reports = [json.loads(report) for report in projected["reports"]]
     assert [(report["level"], report["message"]) for report in reports] == [

@@ -115,7 +115,7 @@ C1
         )
         assert connection.execute("SELECT COUNT(*) FROM cod_structure_import").fetchone() == (2,)
         error = connection.execute("SELECT error FROM cod_structure_import WHERE error IS NOT NULL").fetchone()[0]
-        assert "this CIF holds no structure that could be interpreted" in error
+        assert error.startswith("CIF block 'two', CIF block is missing required atom-site columns:")
         assert "_atom_site_fract_x, _atom_site_fract_y, _atom_site_fract_z" in error
     captured = capsys.readouterr()
     assert "Committed 2/2 CIF imports" in captured.out
@@ -150,12 +150,12 @@ def test_diagnostics_are_stderr_with_recorded_levels(capsys) -> None:
             json.dumps({"level": "warning", "message": "careful"}),
             json.dumps({"level": "error", "message": "bad metadata"}),
         ),
-        error="builtins.ValueError: broken input",
+        error="broken input",
     )
     _emit_result_reports(result)
     expected = (
         "broken.cif: INFO: details\nbroken.cif: WARNING: careful\n"
-        + "broken.cif: ERROR: bad metadata\nbroken.cif: ERROR: builtins.ValueError: broken input\n"
+        + "broken.cif: ERROR: bad metadata\nbroken.cif: ERROR: broken input\n"
     )
     assert capsys.readouterr() == (
         "",
