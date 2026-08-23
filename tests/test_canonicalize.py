@@ -9,9 +9,9 @@ from build_cod.canonicalize import (
     WORKFLOW_URI,
     _bounded_results,
     _canonicalize_one,
+    _catalog_counts,
     _iter_inputs,
     _pending_work,
-    _protostructure_counts,
     _Result,
     _write_batch,
 )
@@ -50,28 +50,33 @@ Cl3 Cl 0.000000 0.500000 0.000000
 Cl4 Cl 0.000000 0.000000 0.500000
 """
 
-# Two different species co-located: the strict reader recommends repair, which
-# keeps the first site; the import row is retained with autocorrected=True.
+# An unrecognized Hall declaration: the strict reader recommends repair, which
+# identifies the setting from the usable symmetry operations.
 AUTOCORRECT = """data_autoc
-_cell_length_a 4.000000
-_cell_length_b 4.000000
-_cell_length_c 4.000000
+_cell_length_a 5.000000
+_cell_length_b 6.000000
+_cell_length_c 7.000000
 _cell_angle_alpha 90.00000
 _cell_angle_beta 90.00000
 _cell_angle_gamma 90.00000
-_space_group_IT_number 1
-_space_group_name_H-M_alt 'P 1'
+_space_group_name_Hall 'Not A Symbol'
 loop_
 _space_group_symop_operation_xyz
 'x,y,z'
+'-x+1/2,-y+1/2,-z'
+'-x+1/2,y+1/2,-z+1/2'
+'-x,-y,-z'
+'-x,y,-z+1/2'
+'x+1/2,-y+1/2,z+1/2'
+'x+1/2,y+1/2,z'
+'x,-y,z+1/2'
 loop_
 _atom_site_label
 _atom_site_type_symbol
 _atom_site_fract_x
 _atom_site_fract_y
 _atom_site_fract_z
-Na1 Na 0.000000 0.000000 0.000000
-Cl1 Cl 0.000000 0.000000 0.000000
+Si1 Si 0.000000 0.333300 0.250000
 """
 
 # No coordinate columns: import fails and is recorded as an error row with no structure.
@@ -130,7 +135,7 @@ def test_two_pass_import_and_canonicalization(tmp_path: Path, fmt: str) -> None:
     pytest.importorskip("spglib")
     if fmt == "duckdb":
         pytest.importorskip("duckdb_engine")
-    from httk.atomistic import ProtostructureRecord, PrototypeRecord
+    from httk.atomistic import ProtostructureRecord, PrototemplateRecord
 
     from build_cod.records import StructureImportRecord
 
@@ -147,20 +152,32 @@ def test_two_pass_import_and_canonicalization(tmp_path: Path, fmt: str) -> None:
         # 4 imports (one broken); 3 have a structure and are canonicalized.
         assert _count(store, StructureImportRecord) == 4
         assert _count(store, StructureImportRecord, lambda v: v.error != None) == 1
+        imports = {}
+        searcher = store.searcher()
+        variable = searcher.variable(StructureImportRecord)
+        searcher.output(variable, "record")
+        for values, _names in searcher:
+            record = values[0]
+            imports[Path(record.source).name] = record
+        assert imports["autoc.cif"].autocorrect_attempted
+        assert imports["autoc.cif"].autocorrected
         assert len(rows) == 3
         assert all(row.error is None for row in rows)
 
         # The two identical NaCl files collapse to ONE protostructure; autoc adds a second.
-        all_protos, high_symmetry = _protostructure_counts(store)
+        all_protos, high_symmetry, all_templates = _catalog_counts(store)
         assert all_protos == 2
         assert high_symmetry == 2  # both canonicalize to spacegroup IT number > 2
+        assert all_templates == 2
         assert _count(store, ProtostructureRecord) == 2
         assert _count(store, ProtostructureRecord, lambda v: v.spacegroup_it_number > 2) == 2
-        assert _count(store, PrototypeRecord) == 2
+        assert _count(store, PrototemplateRecord) == 2
 
         # The two duplicate files share one protostructure and one canonical/run.
         by_source = {Path(row.source).name: row for row in rows}
         assert by_source["nacl_a.cif"].protostructure_content_id == by_source["nacl_dup.cif"].protostructure_content_id
+        assert by_source["nacl_a.cif"].prototemplate_content_id == by_source["nacl_dup.cif"].prototemplate_content_id
+        assert all(row.protostructure_content_id and row.prototemplate_content_id for row in rows)
         assert by_source["nacl_a.cif"].run_content_id == by_source["nacl_dup.cif"].run_content_id
         assert by_source["autoc.cif"].protostructure_content_id != by_source["nacl_a.cif"].protostructure_content_id
 

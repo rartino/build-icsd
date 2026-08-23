@@ -1,10 +1,10 @@
-"""Pass 2: canonicalize imported structures and derive prototypes and protostructures.
+"""Pass 2: canonicalize imported structures and derive prototemplates and protostructures.
 
 Pass 1 (``build_cod.cli``) imports every COD CIF into ``cod_structure_import`` rows.
 This pass reads each import that holds a structure and has no ``cod_canonicalization``
 row yet (that anti-join is the resume mechanism: interrupting and rerunning is safe and
 duplicate-free), canonicalizes it with :func:`~httk.atomistic.canonical_asu`, derives its
-``Protostructure`` and ``Prototype``, and records the canonical structure, the two derived
+``Protostructure`` and ``Prototemplate``, and records the canonical structure, the two derived
 values, a provenance :class:`~httk.core.provenance.Run`, and one
 :class:`~build_cod.records.CanonicalizationRecord` linking them back to the import.
 
@@ -25,15 +25,13 @@ from typing import Any
 from httk.atomistic import (
     ASUStructure,
     ASUStructureView,
-    ProtostructureView,
-    PrototypeView,
     canonical_asu,
 )
 from httk.atomistic.storage.records import (
     ProtostructureRecord,
-    PrototypeRecord,
+    PrototemplateRecord,
     _protostructure_record_from_value,
-    _prototype_record_from_value,
+    _prototemplate_record_from_value,
 )
 from httk.core.provenance import Run, RunEdge
 from httk.core.storage import content_id
@@ -54,29 +52,29 @@ class _Result:
     error: str | None
     canonical: ASUStructure | None
     canonical_content_id: str | None
-    prototype_record: PrototypeRecord | None
-    prototype_content_id: str | None
+    prototemplate_record: PrototemplateRecord | None
+    prototemplate_content_id: str | None
     protostructure_record: ProtostructureRecord | None
     protostructure_content_id: str | None
     lift: bool
 
 
 def _canonicalize_one(item: tuple[str, Any, str, float | None, bool]) -> _Result:
-    """Canonicalize one structure and derive its prototype/protostructure (runs in a worker)."""
+    """Canonicalize one structure and derive its prototemplate/protostructure (runs in a worker)."""
     source, structure_record, original_cid, tolerance, lift = item
     try:
         structure = ASUStructureView(structure_record).unview()
+        protostructure_record = _protostructure_record_from_value(structure.canonical_protostructure())
+        prototemplate_record = _prototemplate_record_from_value(structure.canonical_prototemplate())
         canonical = canonical_asu(structure, tolerance=tolerance, lift=lift)
-        protostructure_record = _protostructure_record_from_value(ProtostructureView(canonical).unview())
-        prototype_record = _prototype_record_from_value(PrototypeView(canonical).unview())
         return _Result(
             source,
             original_cid,
             None,
             canonical,
             content_id(canonical),
-            prototype_record,
-            prototype_record.id,
+            prototemplate_record,
+            prototemplate_record.id,
             protostructure_record,
             protostructure_record.id,
             lift,
@@ -178,7 +176,7 @@ def _write_result(store: SqlStore, result: _Result) -> CanonicalizationRecord:
             result.source, result.original_content_id, None, None, None, None, result.error, result.lift
         )
     store.save(result.canonical)
-    store.save(result.prototype_record)
+    store.save(result.prototemplate_record)
     store.save(result.protostructure_record)
     run = Run(
         workflow_declaration_uri=WORKFLOW_URI,
@@ -190,7 +188,7 @@ def _write_result(store: SqlStore, result: _Result) -> CanonicalizationRecord:
         result.source,
         result.original_content_id,
         result.canonical_content_id,
-        result.prototype_content_id,
+        result.prototemplate_content_id,
         result.protostructure_content_id,
         run.id,
         None,
@@ -219,15 +217,17 @@ def _write_batch(store: SqlStore, batch: list[tuple[int | None, _Result]]) -> tu
     return written, errors
 
 
-def _protostructure_counts(store: SqlStore) -> tuple[int, int]:
-    """Return the total protostructure count and the count with spacegroup IT number > 2."""
+def _catalog_counts(store: SqlStore) -> tuple[int, int, int]:
+    """Return protostructure totals, high-symmetry totals, and prototemplate count."""
     total = store.searcher()
     total.variable(ProtostructureRecord)
     all_count = total.count()
     filtered = store.searcher()
     variable = filtered.variable(ProtostructureRecord)
     filtered.add(variable.spacegroup_it_number > 2)
-    return all_count, filtered.count()
+    prototemplates = store.searcher()
+    prototemplates.variable(PrototemplateRecord)
+    return all_count, filtered.count(), prototemplates.count()
 
 
 def _positive_int(value: str) -> int:
@@ -241,7 +241,7 @@ def _positive_int(value: str) -> int:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Canonicalize imported COD structures and derive prototypes.")
+    parser = argparse.ArgumentParser(description="Canonicalize imported COD structures and derive prototemplates.")
     parser.add_argument("database", type=Path, help="an existing build-cod database (pass 1 output)")
     parser.add_argument(
         "--format",
@@ -257,7 +257,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--tolerance", type=float, default=None, help="forwarded to canonical_asu")
     parser.add_argument("--lift", action="store_true", help="hunt higher pseudosymmetry (forwarded to canonical_asu)")
     parser.add_argument("--retry-errors", action="store_true", help="reprocess previously failed structures")
-    parser.add_argument("--stats", action="store_true", help="print protostructure counts when finished")
+    parser.add_argument(
+        "--stats", action="store_true", help="print protostructure and prototemplate counts when finished"
+    )
     return parser
 
 
@@ -316,8 +318,12 @@ def main(argv: list[str] | None = None) -> int:
             flush=True,
         )
         if args.stats:
-            all_count, high_symmetry = _protostructure_counts(store)
-            print(f"Protostructures: {all_count} total; {high_symmetry} with spacegroup IT number > 2", flush=True)
+            all_count, high_symmetry, prototemplate_count = _catalog_counts(store)
+            print(
+                f"Protostructures: {all_count} total; {high_symmetry} with spacegroup IT number > 2; "
+                f"Prototemplates: {prototemplate_count} total",
+                flush=True,
+            )
     return 0
 
 

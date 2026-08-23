@@ -20,6 +20,7 @@ install:
 build:
 	mkdir -p database
 	PYTHONPATH="src$${PYTHONPATH:+:$${PYTHONPATH}}" COD_PATH="$(COD_PATH)" httk memguard --max-rss-gb 24 --as-gb 12 $(PYTHON) -m build_cod --format "$(FORMAT)" --output "$(OUTPUT)" --workers "$(WORKERS)" --progress-every "$(PROGRESS_EVERY)" $(FILTER_ARGS)
+	$(MAKE) canonicalize
 
 canonicalize:
 	PYTHONPATH="src$${PYTHONPATH:+:$${PYTHONPATH}}" $(PYTHON) -m build_cod.canonicalize "$(OUTPUT)" --format "$(FORMAT)" --workers "$(WORKERS)" --progress-every "$(PROGRESS_EVERY)" --stats

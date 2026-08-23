@@ -231,7 +231,7 @@ class CanonicalizationRecord:
     key: pass 2 processes import rows whose ``source`` has no canonicalization row yet.
     The content-id columns are loose references (the same layout-independent content
     identities used by the searcher and OPTIMADE serving) to the original and canonical
-    structures, the derived prototype and protostructure, and the provenance run.
+    structures, the derived prototemplate and protostructure, and the provenance run.
 
     A ``--retry-errors`` retry supersedes an error row with ``store.replace``, which keeps the
     old row queryable, so after retries the table holds superseded lineage rows. Raw
@@ -241,7 +241,7 @@ class CanonicalizationRecord:
     :param source: The importing row's source path (the resume/link key).
     :param original_content_id: The content id of the imported (pre-canonicalization) structure.
     :param canonical_content_id: The content id of the canonical structure, or ``None`` on failure.
-    :param prototype_content_id: The content id of the derived prototype, or ``None`` on failure.
+    :param prototemplate_content_id: The content id of the derived prototemplate, or ``None`` on failure.
     :param protostructure_content_id: The content id of the derived protostructure, or ``None`` on failure.
     :param run_content_id: The content id of the provenance run, or ``None`` on failure.
     :param error: The per-structure failure text, or ``None`` on success.
@@ -257,7 +257,7 @@ class CanonicalizationRecord:
     source: str
     original_content_id: str
     canonical_content_id: str | None
-    prototype_content_id: str | None
+    prototemplate_content_id: str | None
     protostructure_content_id: str | None
     run_content_id: str | None
     error: str | None
@@ -277,8 +277,8 @@ class CanonicalizationRecord:
             raise TypeError("CanonicalizationRecord lift must be a bool")
         if (self.canonical_content_id is None) == (self.error is None):
             raise ValueError("CanonicalizationRecord requires exactly one of canonical_content_id or error")
-        derived = (self.prototype_content_id, self.protostructure_content_id, self.run_content_id)
+        derived = (self.prototemplate_content_id, self.protostructure_content_id, self.run_content_id)
         if self.error is not None and any(value is not None for value in derived):
             raise ValueError("a failed canonicalization must not carry derived references")
         if self.canonical_content_id is not None and any(value is None for value in derived):
-            raise ValueError("a successful canonicalization requires prototype, protostructure, and run references")
+            raise ValueError("a successful canonicalization requires prototemplate, protostructure, and run references")
