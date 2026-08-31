@@ -54,6 +54,7 @@ from build_cod.records import CanonicalizationRecord
 
 _DEFAULT_DELTA = 0.1
 _DEFAULT_MAX_COVERAGE_SIZE = 150
+_DEFAULT_INGEST_CHUNK = 5000
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -357,21 +358,22 @@ def _bounded_results[TagT, InputT, ResultT](
             yield tag, future.result()
 
 
-def _write_batch(store: SqlStore, batch: list[_GroupResult]) -> tuple[int, int, int]:
-    """Persist one chunk in a single transaction; return ``(distinct_rows, groups, errors)``."""
-    rows = errors = 0
-    with store.transaction():
-        for result in batch:
-            if result.error is not None:
-                # ponytail: a failed (or all-members-missing) group writes no row, so its key
-                # never enters the anti-join and it re-clusters every run. Fine for transient
-                # failures; persist a failure marker row if a permanent failure wastes CPU.
-                errors += 1
-                continue
-            for record in result.records:
-                store.save(record)
-                rows += 1
-    return rows, len(batch), errors
+def _save_records(bulk: Any, batch: list[_GroupResult]) -> int:
+    """Append every non-error result's distinct records into an open bulk-ingest; return the count.
+
+    ``bulk_ingest`` buffers encoded rows and appends them with ``executemany``, ~17x faster than
+    per-record ``save`` for these coordinate-carrying records on DuckDB (whose slow path is
+    row-by-row nested inserts). A failed (or all-members-missing) group contributes no row, so its
+    key never enters the resume anti-join and it re-clusters next run -- fine for transient failures.
+    """
+    written = 0
+    for result in batch:
+        if result.error is not None:
+            continue
+        for record in result.records:
+            bulk.save(record)
+            written += 1
+    return written
 
 
 def _catalog_counts(store: SqlStore) -> tuple[int, int]:
@@ -444,7 +446,16 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--workers", type=_positive_int, default=os.cpu_count() or 1)
     parser.add_argument("--limit", type=_positive_int, default=None, help="process at most this many groups")
     parser.add_argument("--progress-every", type=_positive_int, default=1000)
-    parser.add_argument("--chunk", type=_positive_int, default=200, help="groups committed per transaction")
+    parser.add_argument(
+        "--ingest-chunk",
+        type=_positive_int,
+        default=_DEFAULT_INGEST_CHUNK,
+        help=(
+            "records the bulk-ingest buffers before an executemany flush (default: "
+            f"{_DEFAULT_INGEST_CHUNK}); bounds memory. The whole run is one ingest, so results are "
+            "durable only when it finishes -- an interrupted run re-clusters from the last complete run"
+        ),
+    )
     parser.add_argument("--stats", action="store_true", help="print distinct counts when finished")
     return parser
 
@@ -506,27 +517,22 @@ def main(argv: list[str] | None = None) -> int:
         ) as pool:
             tagged = _tagged_inputs(work, args.delta, args.max_coverage_size)
             results = _bounded_results(pool, _cluster_group, tagged, window=args.workers * 2)
-            batch: list[_GroupResult] = []
-            for _tag, result in results:
-                batch.append(result)
-                leader_fallbacks += result.method == "leader"
-                if len(batch) >= args.chunk:
-                    chunk_rows, _groups, chunk_errors = _write_batch(output_store, batch)
-                    written += chunk_rows
-                    errors += chunk_errors
-                    batch = []
-                processed += 1
-                if processed % args.progress_every == 0:
-                    progress = prognosis.snapshot(processed)
-                    print(
-                        f"Clustered {processed}/{total}; distinct {written}; elapsed {progress.elapsed:.1f}s; "
-                        f"rate {progress.rate:.1f}/s; {progress.prognosis}",
-                        flush=True,
-                    )
-            if batch:
-                chunk_rows, _groups, chunk_errors = _write_batch(output_store, batch)
-                written += chunk_rows
-                errors += chunk_errors
+            # One bulk-ingest for the whole run: the empty-store deferred path stages appends and
+            # builds indexes once at exit (repeated incremental ingests re-run a store-sized anti-join
+            # per batch and collapse throughput). track_sids is off -- nothing needs the minted sids.
+            with output_store.bulk_ingest(chunk_size=args.ingest_chunk, track_sids=False) as bulk:
+                for _tag, result in results:
+                    written += _save_records(bulk, [result])
+                    leader_fallbacks += result.method == "leader"
+                    errors += result.error is not None
+                    processed += 1
+                    if processed % args.progress_every == 0:
+                        progress = prognosis.snapshot(processed)
+                        print(
+                            f"Clustered {processed}/{total}; distinct {written}; elapsed {progress.elapsed:.1f}s; "
+                            f"rate {progress.rate:.1f}/s; {progress.prognosis}",
+                            flush=True,
+                        )
 
         elapsed = max(time.monotonic() - started, 1e-9)
         print(

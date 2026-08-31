@@ -130,8 +130,19 @@ fallback. In the COD corpus almost all groups are tiny (the great majority are s
 only a couple of dozen very popular prototypes hit the cap; raise it to push more groups through
 max-coverage at rising cost, or set it to 1 to force greedy-leader everywhere.
 
-Resume is the same cross-database anti-join as pass 2: a Wyckoff group already present in the
-distinct database is skipped, so an interrupted run continues cleanly.
+Groups are processed smallest-first, so the singleton majority clears quickly and the few
+expensive prototypes run last. Each group's structures are fetched inside the worker that
+clusters it — the source is opened `read_only` (DuckDB `READ_ONLY` access mode) so every worker
+reads it concurrently — rather than serially in the main process. The distinct records are
+written through a single `bulk_ingest` (`executemany` batched appends, ~17× faster than
+per-record `save` on DuckDB, whose slow path is row-by-row nested inserts); `--ingest-chunk`
+bounds its in-memory buffer.
+
+Resume is the cross-database anti-join of pass 2: a Wyckoff group already present in the distinct
+database is skipped. Because the whole run is one `bulk_ingest`, its rows become durable when the
+run finishes — an interrupted run leaves the distinct database unchanged and re-clusters from the
+last *completed* run (append a later batch of new canonicalizations and only the new groups are
+processed). This is the offline-build tradeoff for the batched-write speed.
 
 ## The headline queries
 

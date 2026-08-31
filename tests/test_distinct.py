@@ -16,7 +16,7 @@ from build_cod.distinct import (
     _cluster_leader,
     _default_output,
     _distinct_record,
-    _write_batch,
+    _save_records,
 )
 from build_cod.distinct import (
     main as distinct_main,
@@ -130,8 +130,8 @@ def test_distinct_records_persist_representative_coordinates(tmp_path: Path) -> 
     database = tmp_path / "cod-distinct.sqlite"
     with Backend.sqlite(database) as backend:
         store = SqlStore(backend, entry_records={})
-        rows, groups, errors = _write_batch(store, [result])
-        assert (rows, groups, errors) == (1, 1, 0)
+        with store.bulk_ingest(track_sids=False) as bulk:
+            assert _save_records(bulk, [result]) == 1
         assert _catalog_counts(store) == (1, 0)
 
         searcher = store.searcher()
@@ -141,6 +141,28 @@ def test_distinct_records_persist_representative_coordinates(tmp_path: Path) -> 
         assert len(stored) == 1
         assert stored[0].representative.representative is not None
         assert content_id(stored[0]) == content_id(record)
+
+
+def test_save_records_appends_across_ingests_and_skips_errors(tmp_path: Path) -> None:
+    pytest.importorskip("spglib")
+    from httk.store import Backend, SqlStore
+
+    def _result(cid: str) -> object:
+        value = _build_value("prototype", _rocksalt(cid))
+        record = _distinct_record("prototype", f"wyk-{cid}", cid, 1, value)
+        return distinct._GroupResult("prototype", f"wyk-{cid}", (record,), None, "cover")
+
+    error = distinct._GroupResult("prototype", "wyk-bad", (), "boom", None)
+
+    with Backend.sqlite(tmp_path / "cod-distinct.sqlite") as backend:
+        store = SqlStore(backend, entry_records={})
+        # First ingest writes the tables (empty-store path); the error contributes nothing.
+        with store.bulk_ingest(track_sids=False) as bulk:
+            assert _save_records(bulk, [_result("5.60"), error, _result("5.70")]) == 2
+        # A second ingest appends onto the now-populated store (incremental path).
+        with store.bulk_ingest(track_sids=False) as bulk:
+            assert _save_records(bulk, [_result("5.80"), error]) == 1
+        assert _catalog_counts(store) == (3, 0)
 
 
 def test_distinct_record_validation_rejects_bad_fields() -> None:

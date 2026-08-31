@@ -11,6 +11,7 @@ CANONICAL_MAX_ASU_SITES ?= 64
 DISTINCT_DELTA ?= 0.1
 DISTINCT_MAX_COVERAGE_SIZE ?= 150
 DISTINCT_PROGRESS_EVERY ?= 200
+DISTINCT_INGEST_CHUNK ?= 5000
 HTTK_DUCKDB_MEMORY_LIMIT ?= 6GB
 export HTTK_DUCKDB_MEMORY_LIMIT
 HOST ?= 127.0.0.1
@@ -29,7 +30,7 @@ canonicalize:
 	PYTHONPATH="src$${PYTHONPATH:+:$${PYTHONPATH}}" httk memguard --max-rss-gb 24 $(PYTHON) -m build_cod.canonicalize "$(IMPORT_OUTPUT)" --output "$(CANONICAL_OUTPUT)" --format "$(FORMAT)" --workers "$(WORKERS)" --progress-every "$(PROGRESS_EVERY)" --chunk "$(COMMIT_EVERY)" --max-asu-sites "$(CANONICAL_MAX_ASU_SITES)" --stats
 
 distinct:
-	PYTHONPATH="src$${PYTHONPATH:+:$${PYTHONPATH}}" httk memguard --max-rss-gb 24 $(PYTHON) -m build_cod.distinct "$(CANONICAL_OUTPUT)" --output "$(DISTINCT_OUTPUT)" --format "$(FORMAT)" --workers "$(WORKERS)" --progress-every "$(DISTINCT_PROGRESS_EVERY)" --chunk "$(COMMIT_EVERY)" --delta "$(DISTINCT_DELTA)" --max-coverage-size "$(DISTINCT_MAX_COVERAGE_SIZE)" --stats
+	PYTHONPATH="src$${PYTHONPATH:+:$${PYTHONPATH}}" httk memguard --max-rss-gb 24 $(PYTHON) -m build_cod.distinct "$(CANONICAL_OUTPUT)" --output "$(DISTINCT_OUTPUT)" --format "$(FORMAT)" --workers "$(WORKERS)" --progress-every "$(DISTINCT_PROGRESS_EVERY)" --ingest-chunk "$(DISTINCT_INGEST_CHUNK)" --delta "$(DISTINCT_DELTA)" --max-coverage-size "$(DISTINCT_MAX_COVERAGE_SIZE)" --stats
 
 serve:
 	PYTHONPATH="src$${PYTHONPATH:+:$${PYTHONPATH}}" $(PYTHON) -m serve_cod_optimade --format "$(FORMAT)" --database "$(CANONICAL_OUTPUT)" --host "$(HOST)" --port "$(PORT)"
