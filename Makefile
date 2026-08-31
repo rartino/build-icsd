@@ -1,33 +1,38 @@
 PYTHON ?= python3
 COD_PATH ?= ../DATA/COD
 FORMAT ?= duckdb
-OUTPUT ?= database/cod.$(FORMAT)
+IMPORT_OUTPUT ?= database/cod.$(FORMAT)
+CANONICAL_OUTPUT ?= database/cod-canonical.$(FORMAT)
+DISTINCT_OUTPUT ?= database/cod-distinct.$(FORMAT)
 WORKERS ?= $(shell $(PYTHON) -c 'import os; print(os.cpu_count()//2 or 1)')
 PROGRESS_EVERY ?= 1000
 COMMIT_EVERY ?= 200
-FILTER ?= 1
+CANONICAL_MAX_ASU_SITES ?= 64
+DISTINCT_DELTA ?= 0.1
+DISTINCT_MAX_COVERAGE_SIZE ?= 150
+DISTINCT_PROGRESS_EVERY ?= 200
+HTTK_DUCKDB_MEMORY_LIMIT ?= 6GB
+export HTTK_DUCKDB_MEMORY_LIMIT
 HOST ?= 127.0.0.1
 PORT ?= 8080
 
-.PHONY: install build canonicalize serve format-check test check
-
-ifeq ($(FILTER),0)
-FILTER_ARGS = --no-filter
-endif
+.PHONY: install build canonicalize distinct serve format-check test check
 
 install:
 	python3 -m pip install -e .
 
 build:
 	mkdir -p database
-	PYTHONPATH="src$${PYTHONPATH:+:$${PYTHONPATH}}" COD_PATH="$(COD_PATH)" httk memguard --max-rss-gb 24 --as-gb 12 $(PYTHON) -m build_cod --format "$(FORMAT)" --output "$(OUTPUT)" --workers "$(WORKERS)" --progress-every "$(PROGRESS_EVERY)" --commit-every "$(COMMIT_EVERY)" $(FILTER_ARGS)
-	$(MAKE) canonicalize
+	PYTHONPATH="src$${PYTHONPATH:+:$${PYTHONPATH}}" COD_PATH="$(COD_PATH)" httk memguard --max-rss-gb 24 $(PYTHON) -m build_cod --format "$(FORMAT)" --output "$(IMPORT_OUTPUT)" --workers "$(WORKERS)" --progress-every "$(PROGRESS_EVERY)" --commit-every "$(COMMIT_EVERY)"
 
 canonicalize:
-	PYTHONPATH="src$${PYTHONPATH:+:$${PYTHONPATH}}" $(PYTHON) -m build_cod.canonicalize "$(OUTPUT)" --format "$(FORMAT)" --workers "$(WORKERS)" --progress-every "$(PROGRESS_EVERY)" --chunk "$(COMMIT_EVERY)" --stats
+	PYTHONPATH="src$${PYTHONPATH:+:$${PYTHONPATH}}" httk memguard --max-rss-gb 24 $(PYTHON) -m build_cod.canonicalize "$(IMPORT_OUTPUT)" --output "$(CANONICAL_OUTPUT)" --format "$(FORMAT)" --workers "$(WORKERS)" --progress-every "$(PROGRESS_EVERY)" --chunk "$(COMMIT_EVERY)" --max-asu-sites "$(CANONICAL_MAX_ASU_SITES)" --stats
+
+distinct:
+	PYTHONPATH="src$${PYTHONPATH:+:$${PYTHONPATH}}" httk memguard --max-rss-gb 24 $(PYTHON) -m build_cod.distinct "$(CANONICAL_OUTPUT)" --output "$(DISTINCT_OUTPUT)" --format "$(FORMAT)" --workers "$(WORKERS)" --progress-every "$(DISTINCT_PROGRESS_EVERY)" --chunk "$(COMMIT_EVERY)" --delta "$(DISTINCT_DELTA)" --max-coverage-size "$(DISTINCT_MAX_COVERAGE_SIZE)" --stats
 
 serve:
-	PYTHONPATH="src$${PYTHONPATH:+:$${PYTHONPATH}}" $(PYTHON) -m serve_cod_optimade --format "$(FORMAT)" --database "$(OUTPUT)" --host "$(HOST)" --port "$(PORT)"
+	PYTHONPATH="src$${PYTHONPATH:+:$${PYTHONPATH}}" $(PYTHON) -m serve_cod_optimade --format "$(FORMAT)" --database "$(CANONICAL_OUTPUT)" --host "$(HOST)" --port "$(PORT)"
 
 format-check:
 	$(PYTHON) -m ruff check src tests

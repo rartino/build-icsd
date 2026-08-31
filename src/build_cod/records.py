@@ -31,7 +31,7 @@ class _StructureImportSource:
 
 @dataclass(frozen=True)
 class StructureImportRequest(_StructureImportSource):
-    """The source and filter setting sent to a pass-1 worker."""
+    """The source and primitive-site filter setting sent to a pass-1 worker."""
 
     path: Path
     filter_enabled: bool = True
@@ -42,6 +42,7 @@ class _StructureImportWorkerResult(_StructureImportSource):
     """Picklable pass-1 worker outcome."""
 
     source: str
+    journal_name: str | None
     structure: ASUStructure | None
     reports: tuple[str, ...]
     error: str | None
@@ -126,11 +127,14 @@ def _journal_title(path: Path) -> str | None:
     return None
 
 
-def _journal_exclusion(path: Path) -> str | None:
-    title = _journal_title(path)
+def _journal_exclusion_for_title(title: str | None) -> str | None:
     if title is not None and _normalize_journal(title) in _FILTER_JOURNALS:
         return f"journal blacklist: {title}"
     return None
+
+
+def _journal_exclusion(path: Path) -> str | None:
+    return _journal_exclusion_for_title(_journal_title(path))
 
 
 def _site_exclusion(structure: ASUStructure, path: Path) -> str | None:
@@ -176,21 +180,19 @@ def _read_structure(request: StructureImportRequest) -> _StructureImportWorkerRe
     path = request.path
     structure = None
     error_text = None
-    exclusion_reason = _journal_exclusion(path) if request.filter_enabled else None
+    journal_name = _journal_title(path)
+    exclusion_reason = None
     autocorrect_attempted = False
     autocorrected = False
     with collect_reports(level="info") as reports:
         try:
+            structure = ASUStructureView(path).unview()
+            if request.filter_enabled:
+                exclusion_reason = _site_exclusion(structure, path)
             if exclusion_reason is None:
-                structure = ASUStructureView(path).unview()
-                if request.filter_enabled:
-                    exclusion_reason = _site_exclusion(structure, path)
-                if exclusion_reason is None:
-                    content_id(structure, as_record=ASUStructureRecord)
-                else:
-                    structure = None
-                    error_text = f"excluded: {exclusion_reason}"
+                content_id(structure, as_record=ASUStructureRecord)
             else:
+                structure = None
                 error_text = f"excluded: {exclusion_reason}"
         except Exception as error:  # noqa: BLE001 - one bad external file must become a record, not abort the build
             if isinstance(error, ValueError) and "repair=True" in str(error):
@@ -214,6 +216,7 @@ def _read_structure(request: StructureImportRequest) -> _StructureImportWorkerRe
                 error_text = _error_text(error)
     return _StructureImportWorkerResult(
         str(path),
+        journal_name,
         structure,
         tuple(_report_json(record) for record in reports.records),
         error_text,
@@ -234,6 +237,7 @@ class StructureImportRecord:
     __httk_canonical_source__: ClassVar[type[_StructureImportSource]] = _StructureImportSource
 
     source: str
+    journal_name: str | None
     structure: ASUStructureRecord | None
     reports: tuple[str, ...]
     error: str | None
@@ -256,6 +260,7 @@ class StructureImportRecord:
         result = _read_structure(source) if isinstance(source, StructureImportRequest) else source
         return {
             "source": result.source,
+            "journal_name": result.journal_name,
             "structure": result.structure,
             "reports": result.reports,
             "error": result.error,
@@ -269,8 +274,8 @@ class CanonicalizationRecord:
     """Record the pass-2 canonicalization outcome for one imported structure.
 
     Exactly one of ``canonical_content_id`` (success) or ``error`` (failure) is set.
-    ``source`` is the importing ``cod_structure_import`` row's path and is the resume
-    key: pass 2 processes import rows whose ``source`` has no canonicalization row yet.
+    ``source`` is the source database's importing ``cod_structure_import`` row path and is
+    the resume key: pass 2 processes imports whose ``source`` has no destination row yet.
     The content-id columns are loose references (the same layout-independent content
     identities used by the searcher and OPTIMADE serving) to the original and canonical
     structures, the derived prototype and protostructure, and the provenance run.

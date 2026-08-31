@@ -1,7 +1,7 @@
-"""The store's entry-family declaration, shared byte-for-byte by both build passes.
+"""The store's entry-family declaration, shared byte-for-byte by both databases.
 
-The declaration is stamped into the database on first open and byte-checked on reopen,
-so pass 1 (import) and pass 2 (canonicalization) must construct exactly the same
+The declaration is stamped into each database on first open and byte-checked on reopen,
+so pass 1 (import) and pass 2 (canonicalization) construct exactly the same
 ``SqlStore(entry_records=...)`` even though only pass 2 writes prototypes, protostructures
 and runs.
 
@@ -21,8 +21,14 @@ from httk.atomistic import (
     UnitcellStructureRecord,
 )
 from httk.atomistic.entries.structures import StructureEntry
+from httk.store import EntryIdScheme
 
 
 def entry_records() -> dict[type, type | tuple[type, ...]]:
     """Return the structures-only entry declaration; pass-2 catalogs are on-demand tables."""
     return {StructureEntry: (UnitcellStructureRecord, FundamentalDomainStructureRecord, ASUStructureRecord)}
+
+
+def entry_id_scheme() -> EntryIdScheme:
+    """Return the stable COD entry-id namespace used by both build passes."""
+    return EntryIdScheme("cod", "1")

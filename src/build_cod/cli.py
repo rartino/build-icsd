@@ -13,7 +13,7 @@ from httk.atomistic import ASUStructureRecord
 from httk.store import Backend, SqlStore
 
 from build_cod.canonicalize import _bounded_results
-from build_cod.layout import entry_records
+from build_cod.layout import entry_id_scheme, entry_records
 from build_cod.progress import CompletionPrognosis
 from build_cod.records import (
     StructureImportRecord,
@@ -56,7 +56,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--workers", type=_positive_int, default=_default_workers())
     parser.add_argument("--progress-every", type=_positive_int, default=1000)
     parser.add_argument("--commit-every", type=_positive_int, default=200)
-    parser.add_argument("--no-filter", action="store_true", help="import journal-blacklisted and oversized structures")
+    parser.add_argument(
+        "--no-filter",
+        action="store_true",
+        help="import structures above the 1,000-primitive-site safety limit",
+    )
     return parser
 
 
@@ -133,7 +137,7 @@ def main(argv: list[str] | None = None) -> int:
     database = Backend.sqlite(output) if args.database_format == "sqlite" else Backend.duckdb(output)
     started = time.monotonic()
     with database:
-        store = SqlStore(database, entry_records=entry_records())
+        store = SqlStore(database, entry_records=entry_records(), entry_ids=entry_id_scheme())
         existing = _committed_sources(store)
         current = {str(path) for path in paths}
         already = len(existing & current)

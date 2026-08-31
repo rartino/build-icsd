@@ -68,19 +68,26 @@ def test_structure_import_retries_an_advertised_autocorrect(tmp_path: Path, monk
     assert load_calls == [(path, {"repair": True})]
 
 
-def test_structure_import_excludes_exact_journal_title(tmp_path: Path, monkeypatch) -> None:
+def test_structure_import_retains_exact_journal_title(tmp_path: Path, monkeypatch) -> None:
     path = tmp_path / "journal.cif"
     path.write_text("data_one\n_journal_name_full 'The Organic Letters'\n", encoding="utf-8")
+    structure = object()
 
-    class UnexpectedView:
+    class View:
         def __init__(self, source: Path) -> None:
-            raise AssertionError(f"journal exclusion should precede parsing: {source}")
+            assert source == path
 
-    monkeypatch.setattr(records, "ASUStructureView", UnexpectedView)
+        def unview(self) -> object:
+            return structure
+
+    monkeypatch.setattr(records, "ASUStructureView", View)
+    monkeypatch.setattr(records, "primitive_cell", lambda value: SimpleNamespace(structure=SimpleNamespace(sites=[])))
+    monkeypatch.setattr(records, "content_id", lambda *args, **kwargs: "content-id")
     projected = records.StructureImportRecord.__httk_project__(records.StructureImportRequest(path))
 
-    assert projected["structure"] is None
-    assert projected["error"] == "excluded: journal blacklist: The Organic Letters"
+    assert projected["journal_name"] == "The Organic Letters"
+    assert projected["structure"] is structure
+    assert projected["error"] is None
     records.StructureImportRecord(**projected)
 
 

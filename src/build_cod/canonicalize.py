@@ -1,12 +1,12 @@
 """Pass 2: canonicalize imported structures and derive prototypes and protostructures.
 
-Pass 1 (``build_cod.cli``) imports every COD CIF into ``cod_structure_import`` rows.
-This pass reads each import that holds a structure and has no ``cod_canonicalization``
-row yet (that anti-join is the resume mechanism: interrupting and rerunning is safe and
-duplicate-free), canonicalizes it with :func:`~httk.atomistic.canonical_asu`, derives its
-``Protostructure`` and ``Prototype``, and records the canonical structure, the two derived
-values, a provenance :class:`~httk.core.provenance.Run`, and one
-:class:`~build_cod.records.CanonicalizationRecord` linking them back to the import.
+Pass 1 (``build_cod.cli``) imports every COD CIF into a source database. This pass reads
+each import that holds a structure and has no ``cod_canonicalization`` row in a separate
+destination database yet (that cross-database anti-join is the resume mechanism),
+canonicalizes it with :func:`~httk.atomistic.canonical_asu`, derives its ``Protostructure``
+and ``Prototype``, and records only the canonical structure, the two derived values, a
+provenance :class:`~httk.core.provenance.Run`, and one
+:class:`~build_cod.records.CanonicalizationRecord` linking them back to the source import.
 
 Compute (recognition + lifting + derivation) runs in a process pool; a single writer in
 the main process saves results in chunked transactions.
@@ -42,11 +42,17 @@ from httk.core.provenance import Run, RunEdge
 from httk.core.storage import content_id
 from httk.store import Backend, SqlStore
 
-from build_cod.layout import entry_records
+from build_cod.layout import entry_id_scheme, entry_records
 from build_cod.progress import CompletionPrognosis
-from build_cod.records import CanonicalizationRecord, StructureImportRecord, _error_text
+from build_cod.records import (
+    CanonicalizationRecord,
+    StructureImportRecord,
+    _error_text,
+    _journal_exclusion_for_title,
+)
 
 WORKFLOW_URI = "https://schemas.httk.org/defs/v0.1/workflows/cod-canonicalization"
+_DEFAULT_MAX_ASU_SITES = 64
 
 
 @dataclass(frozen=True)
@@ -65,11 +71,16 @@ class _Result:
     lift: bool
 
 
-def _canonicalize_one(item: tuple[str, Any, str, float | None, bool]) -> _Result:
+def _canonicalize_one(item: tuple[str, Any, str, float | None, bool, int]) -> _Result:
     """Canonicalize one structure and derive its prototype/protostructure (runs in a worker)."""
-    source, structure_record, original_cid, tolerance, lift = item
+    source, structure_record, original_cid, tolerance, lift, max_asu_sites = item
     try:
         structure = ASUStructureView(structure_record).unview()
+        site_count = len(structure.wyckoff_sites)
+        if site_count > max_asu_sites:
+            raise ValueError(
+                f"canonicalization skipped: asymmetric-unit site count {site_count} exceeds limit {max_asu_sites}"
+            )
         canonical = canonical_asu(structure, tolerance=tolerance, lift=lift, preserve_chirality=True)
         prototype_canonical = normalize_chirality(canonical)
         recognized_protostructure = ProtostructureView(prototype_canonical).unview()
@@ -85,9 +96,9 @@ def _canonicalize_one(item: tuple[str, Any, str, float | None, bool]) -> _Result
             canonical,
             content_id(canonical),
             prototype_record,
-            prototype_record.id,
+            content_id(prototype_record),
             protostructure_record,
-            protostructure_record.id,
+            content_id(protostructure_record),
             lift,
         )
     except Exception as error:  # noqa: BLE001 - one bad structure becomes an error row, not an aborted pass
@@ -122,16 +133,21 @@ def _canonicalization_state(store: SqlStore, retry_errors: bool) -> tuple[set[st
     return done, error_sids
 
 
-def _pending_work(store: SqlStore, *, retry_errors: bool) -> list[tuple[str, int, int | None]]:
+def _pending_work(
+    source_store: SqlStore, destination_store: SqlStore, *, retry_errors: bool
+) -> list[tuple[str, int, int | None]]:
     """List ``(source, import_sid, retry_sid)`` for imports needing canonicalization."""
-    done, error_sids = _canonicalization_state(store, retry_errors)
+    done, error_sids = _canonicalization_state(destination_store, retry_errors)
     work: list[tuple[str, int, int | None]] = []
-    searcher = store.searcher()
+    searcher = source_store.searcher()
     variable = searcher.variable(StructureImportRecord)
     searcher.add(variable.structure != None)
     searcher.output(variable.source, "source")
     searcher.output(variable.sid, "sid")
-    for (source, sid), _names in searcher:
+    searcher.output(variable.journal_name, "journal_name")
+    for (source, sid, journal_name), _names in searcher:
+        if _journal_exclusion_for_title(journal_name) is not None:
+            continue
         if source not in done:
             work.append((source, sid, None))
         elif retry_errors and source in error_sids:
@@ -140,8 +156,12 @@ def _pending_work(store: SqlStore, *, retry_errors: bool) -> list[tuple[str, int
 
 
 def _iter_inputs(
-    store: SqlStore, work: list[tuple[str, int, int | None]], tolerance: float | None, lift: bool
-) -> Iterator[tuple[int | None, tuple[str, Any, str, float | None, bool]]]:
+    source_store: SqlStore,
+    work: list[tuple[str, int, int | None]],
+    tolerance: float | None,
+    lift: bool,
+    max_asu_sites: int,
+) -> Iterator[tuple[int | None, tuple[str, Any, str, float | None, bool, int]]]:
     """Yield ``(retry_sid, worker_input)`` lazily, eager-fetching each import's structure record.
 
     This generator is pulled only as fast as the bounded window in :func:`_bounded_results`
@@ -149,8 +169,8 @@ def _iter_inputs(
     memory stays O(window), never O(corpus).
     """
     for source, import_sid, retry_sid in work:
-        imported = store.fetch(StructureImportRecord, import_sid, eager=True)
-        yield retry_sid, (source, imported.structure, imported.structure.id, tolerance, lift)
+        imported = source_store.fetch(StructureImportRecord, import_sid, eager=True)
+        yield retry_sid, (source, imported.structure, imported.structure.id, tolerance, lift, max_asu_sites)
 
 
 def _bounded_results[TagT, InputT, ResultT](
@@ -201,7 +221,7 @@ def _write_result(store: SqlStore, result: _Result) -> CanonicalizationRecord:
         result.canonical_content_id,
         result.prototype_content_id,
         result.protostructure_content_id,
-        run.id,
+        content_id(run),
         None,
         result.lift,
     )
@@ -253,13 +273,18 @@ def _positive_int(value: str) -> int:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Canonicalize imported COD structures and derive prototypes.")
-    parser.add_argument("database", type=Path, help="an existing build-cod database (pass 1 output)")
+    parser.add_argument("source_database", type=Path, help="the existing pass-1 import database")
+    parser.add_argument(
+        "--output",
+        type=Path,
+        help="separate canonical database (default: SOURCE with '-canonical' before its suffix)",
+    )
     parser.add_argument(
         "--format",
         choices=("sqlite", "duckdb"),
         default=None,
         dest="database_format",
-        help="database format (default: inferred from the file suffix, else duckdb)",
+        help="source and output format (default: inferred independently from each suffix)",
     )
     parser.add_argument("--workers", type=_positive_int, default=os.cpu_count() or 1)
     parser.add_argument("--limit", type=_positive_int, default=None, help="process at most this many structures")
@@ -267,6 +292,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--chunk", type=_positive_int, default=200, help="rows committed per transaction")
     parser.add_argument("--tolerance", type=float, default=None, help="forwarded to canonical_asu")
     parser.add_argument("--lift", action="store_true", help="hunt higher pseudosymmetry (forwarded to canonical_asu)")
+    parser.add_argument(
+        "--max-asu-sites",
+        type=_positive_int,
+        default=_DEFAULT_MAX_ASU_SITES,
+        help=f"skip structures above this ASU site count (default: {_DEFAULT_MAX_ASU_SITES})",
+    )
     parser.add_argument("--retry-errors", action="store_true", help="reprocess previously failed structures")
     parser.add_argument("--stats", action="store_true", help="print protostructure and prototype counts when finished")
     return parser
@@ -278,34 +309,52 @@ def _resolve_format(database: Path, override: str | None) -> str:
     return "sqlite" if database.suffix == ".sqlite" else "duckdb"
 
 
+def _default_output(source: Path) -> Path:
+    suffix = source.suffix or ".duckdb"
+    return source.with_name(f"{source.stem}-canonical{suffix}")
+
+
 def main(argv: list[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
-    if not args.database.is_file():
-        _parser().error(f"database does not exist: {args.database}")
-    database_format = _resolve_format(args.database, args.database_format)
-    database = Backend.sqlite(args.database) if database_format == "sqlite" else Backend.duckdb(args.database)
+    parser = _parser()
+    args = parser.parse_args(argv)
+    source_path = args.source_database
+    if not source_path.is_file():
+        parser.error(f"source database does not exist: {source_path}")
+    output_path = args.output or _default_output(source_path)
+    if source_path.resolve() == output_path.resolve():
+        parser.error("source and output databases must be different files")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    source_format = _resolve_format(source_path, args.database_format)
+    output_format = _resolve_format(output_path, args.database_format)
+    source_database = Backend.sqlite(source_path) if source_format == "sqlite" else Backend.duckdb(source_path)
+    output_database = Backend.sqlite(output_path) if output_format == "sqlite" else Backend.duckdb(output_path)
 
     started = time.monotonic()
     processed = written = errors = 0
-    with database:
-        store = SqlStore(database, entry_records=entry_records())
-        work = _pending_work(store, retry_errors=args.retry_errors)
+    with source_database, output_database:
+        source_store = SqlStore(source_database, entry_records=entry_records(), entry_ids=entry_id_scheme())
+        output_store = SqlStore(output_database, entry_records=entry_records(), entry_ids=entry_id_scheme())
+        work = _pending_work(source_store, output_store, retry_errors=args.retry_errors)
         if args.limit is not None:
             work = work[: args.limit]
         total = len(work)
         prognosis = CompletionPrognosis(total)
-        print(f"Canonicalizing {total} imported structures with {args.workers} worker(s)...", flush=True)
+        print(
+            f"Canonicalizing {total} remaining imported structures from {source_path} into {output_path} "
+            f"with {args.workers} worker(s)...",
+            flush=True,
+        )
 
         with ProcessPoolExecutor(max_workers=args.workers) as pool:
             # Keep only ~2 inputs per worker in flight so the eager per-row fetch materializes
             # a bounded window of structures at a time, never the whole corpus up front.
-            tagged = _iter_inputs(store, work, args.tolerance, args.lift)
+            tagged = _iter_inputs(source_store, work, args.tolerance, args.lift, args.max_asu_sites)
             results = _bounded_results(pool, _canonicalize_one, tagged, window=args.workers * 2)
             batch: list[tuple[int | None, _Result]] = []
             for retry_sid, result in results:
                 batch.append((retry_sid, result))
                 if len(batch) >= args.chunk:
-                    chunk_written, chunk_errors = _write_batch(store, batch)
+                    chunk_written, chunk_errors = _write_batch(output_store, batch)
                     written += chunk_written
                     errors += chunk_errors
                     batch = []
@@ -318,7 +367,7 @@ def main(argv: list[str] | None = None) -> int:
                         flush=True,
                     )
             if batch:
-                chunk_written, chunk_errors = _write_batch(store, batch)
+                chunk_written, chunk_errors = _write_batch(output_store, batch)
                 written += chunk_written
                 errors += chunk_errors
 
@@ -329,7 +378,7 @@ def main(argv: list[str] | None = None) -> int:
             flush=True,
         )
         if args.stats:
-            all_count, high_symmetry, prototype_count = _catalog_counts(store)
+            all_count, high_symmetry, prototype_count = _catalog_counts(output_store)
             print(
                 f"Protostructures: {all_count} total; {high_symmetry} with spacegroup IT number > 2; "
                 f"Prototypes: {prototype_count} total",

@@ -26,9 +26,9 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
-    path = args.database or Path("database") / f"cod.{args.database_format}"
+    path = args.database or Path("database") / f"cod-canonical.{args.database_format}"
     if not path.is_file():
-        parser.error(f"database does not exist: {path}; run make build first")
+        parser.error(f"database does not exist: {path}; create it with make build or make canonicalize first")
 
     database = Backend.sqlite(path) if args.database_format == "sqlite" else Backend.duckdb(path)
     with database:

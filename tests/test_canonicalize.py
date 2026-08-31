@@ -17,7 +17,7 @@ from build_cod.canonicalize import (
 )
 from build_cod.canonicalize import main as canon_main
 from build_cod.cli import main as build_main
-from build_cod.layout import entry_records
+from build_cod.layout import entry_id_scheme, entry_records
 from build_cod.records import CanonicalizationRecord, StructureImportRecord
 
 # A rocksalt NaCl declared in P1 (identity symmetry) whose coordinates recognition
@@ -93,6 +93,8 @@ _atom_site_label
 C1
 """
 
+BLACKLISTED = NACL_P1.replace("data_nacl", "data_blacklisted\n_journal_name_full 'Organic Letters'", 1)
+
 
 def _fixture(tmp_path: Path) -> Path:
     cif = tmp_path / "COD" / "cif"
@@ -101,6 +103,7 @@ def _fixture(tmp_path: Path) -> Path:
     (cif / "nacl_dup.cif").write_text(NACL_P1, encoding="utf-8")
     (cif / "autoc.cif").write_text(AUTOCORRECT, encoding="utf-8")
     (cif / "broken.cif").write_text(BROKEN, encoding="utf-8")
+    (cif / "blacklisted.cif").write_text(BLACKLISTED, encoding="utf-8")
     return tmp_path / "COD"
 
 
@@ -108,7 +111,11 @@ def _open_store(database: Path, fmt: str):
     from httk.store import Backend, SqlStore
 
     backend = Backend.sqlite(database) if fmt == "sqlite" else Backend.duckdb(database)
-    return backend, SqlStore
+
+    def open_store(database, **kwargs):
+        return SqlStore(database, entry_ids=entry_id_scheme(), **kwargs)
+
+    return backend, open_store
 
 
 def _count(store, record_type, predicate=None) -> int:
@@ -126,6 +133,24 @@ def _canonicalization_rows(store) -> list[CanonicalizationRecord]:
     return [values[0] for values, _names in searcher]
 
 
+def _table_names(backend) -> set[str]:
+    with backend.engine.connect() as connection:
+        if connection.dialect.name == "sqlite":
+            rows = connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE type = 'table'")
+        else:
+            rows = connection.exec_driver_sql(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'"
+            )
+        return {str(row[0]) for row in rows}
+
+
+def test_canonicalization_rejects_the_source_as_its_output(tmp_path: Path) -> None:
+    database = tmp_path / "cod.sqlite"
+    database.touch()
+    with pytest.raises(SystemExit):
+        canon_main([str(database), "--output", str(database), "--format", "sqlite"])
+
+
 @pytest.mark.parametrize("fmt", ["sqlite", "duckdb"])
 def test_two_pass_import_and_canonicalization(tmp_path: Path, fmt: str) -> None:
     # The DuckDB parametrization runs pass 1 as a parallel (workers=2) `deferred`-finalize
@@ -140,17 +165,16 @@ def test_two_pass_import_and_canonicalization(tmp_path: Path, fmt: str) -> None:
     from build_cod.records import StructureImportRecord
 
     cod = _fixture(tmp_path)
-    database = tmp_path / f"cod.{fmt}"
-    assert build_main([str(cod), "--format", fmt, "--output", str(database), "--workers", "2"]) == 0
-    assert canon_main([str(database), "--format", fmt, "--workers", "2", "--lift"]) == 0
+    source = tmp_path / f"cod.{fmt}"
+    canonical = tmp_path / f"cod-canonical.{fmt}"
+    assert build_main([str(cod), "--format", fmt, "--output", str(source), "--workers", "2"]) == 0
+    assert canon_main([str(source), "--output", str(canonical), "--format", fmt, "--workers", "2", "--lift"]) == 0
 
-    backend, SqlStore = _open_store(database, fmt)
+    backend, SqlStore = _open_store(source, fmt)
     with backend:
         store = SqlStore(backend, entry_records=entry_records())
-        rows = _canonicalization_rows(store)
-
-        # 4 imports (one broken); 3 have a structure and are canonicalized.
-        assert _count(store, StructureImportRecord) == 4
+        assert "cod_canonicalization" not in _table_names(backend)
+        assert _count(store, StructureImportRecord) == 5
         assert _count(store, StructureImportRecord, lambda v: v.error != None) == 1
         imports = {}
         searcher = store.searcher()
@@ -161,6 +185,16 @@ def test_two_pass_import_and_canonicalization(tmp_path: Path, fmt: str) -> None:
             imports[Path(record.source).name] = record
         assert imports["autoc.cif"].autocorrect_attempted
         assert imports["autoc.cif"].autocorrected
+        assert imports["blacklisted.cif"].structure is not None
+        assert imports["blacklisted.cif"].journal_name == "Organic Letters"
+
+    backend, SqlStore = _open_store(canonical, fmt)
+    with backend:
+        store = SqlStore(backend, entry_records=entry_records())
+        assert "cod_structure_import" not in _table_names(backend)
+        rows = _canonicalization_rows(store)
+
+        # The broken import and journal-blacklisted import do not enter the canonical catalog.
         assert len(rows) == 3
         assert all(row.error is None for row in rows)
 
@@ -183,7 +217,7 @@ def test_two_pass_import_and_canonicalization(tmp_path: Path, fmt: str) -> None:
 
     # Provenance: the Run edges join original -> canonical (verified via raw SQL on SQLite).
     if fmt == "sqlite":
-        connection = sqlite3.connect(database)
+        connection = sqlite3.connect(canonical)
         pairs = connection.execute(
             """
             SELECT ie.entry_id, oe.entry_id
@@ -198,10 +232,8 @@ def test_two_pass_import_and_canonicalization(tmp_path: Path, fmt: str) -> None:
         ).fetchall()
         root_rows = connection.execute(
             """
-            SELECT c.original_content_id, c.canonical_content_id,
-                   original._httk_role, canonical._httk_role
+            SELECT c.original_content_id, c.canonical_content_id, canonical._httk_role
             FROM cod_canonicalization c
-            JOIN atomistic_asu_structure original ON original.content_id = c.original_content_id
             JOIN atomistic_asu_structure canonical ON canonical.content_id = c.canonical_content_id
             WHERE c.error IS NULL
             """
@@ -211,8 +243,8 @@ def test_two_pass_import_and_canonicalization(tmp_path: Path, fmt: str) -> None:
         record_pairs = {(row.original_content_id, row.canonical_content_id) for row in rows}
         assert run_pairs == record_pairs
         assert len(run_pairs) == 2  # deduplicated: the duplicate crystal shares one run
-        assert {(original, canonical) for original, canonical, *_roles in root_rows} == record_pairs
-        assert all(original_role == canonical_role == 1 for *_ids, original_role, canonical_role in root_rows)
+        assert {(original, canonical) for original, canonical, _role in root_rows} == record_pairs
+        assert all(canonical_role == 1 for *_ids, canonical_role in root_rows)
 
 
 @pytest.mark.parametrize("fmt", ["sqlite", "duckdb"])
@@ -223,17 +255,18 @@ def test_resume_is_duplicate_free_and_complete(tmp_path: Path, fmt: str) -> None
     from httk.atomistic import ProtostructureRecord
 
     cod = _fixture(tmp_path)
-    database = tmp_path / f"cod.{fmt}"
-    assert build_main([str(cod), "--format", fmt, "--output", str(database), "--workers", "2"]) == 0
+    source = tmp_path / f"cod.{fmt}"
+    canonical = tmp_path / f"cod-canonical.{fmt}"
+    assert build_main([str(cod), "--format", fmt, "--output", str(source), "--workers", "2"]) == 0
 
     # Interrupt after one, then finish; the anti-join must not reprocess or duplicate.
-    assert canon_main([str(database), "--format", fmt, "--workers", "1", "--limit", "1"]) == 0
-    backend, SqlStore = _open_store(database, fmt)
+    assert canon_main([str(source), "--output", str(canonical), "--format", fmt, "--workers", "1", "--limit", "1"]) == 0
+    backend, SqlStore = _open_store(canonical, fmt)
     with backend:
         store = SqlStore(backend, entry_records=entry_records())
         assert len(_canonicalization_rows(store)) == 1
 
-    assert canon_main([str(database), "--format", fmt, "--workers", "2"]) == 0
+    assert canon_main([str(source), "--output", str(canonical), "--format", fmt, "--workers", "2"]) == 0
     with backend:
         store = SqlStore(backend, entry_records=entry_records())
         rows = _canonicalization_rows(store)
@@ -242,7 +275,7 @@ def test_resume_is_duplicate_free_and_complete(tmp_path: Path, fmt: str) -> None
         assert _count(store, ProtostructureRecord) == 2
 
     # A third full run has nothing left to do and adds nothing.
-    assert canon_main([str(database), "--format", fmt, "--workers", "2"]) == 0
+    assert canon_main([str(source), "--output", str(canonical), "--format", fmt, "--workers", "2"]) == 0
     with backend:
         store = SqlStore(backend, entry_records=entry_records())
         assert len(_canonicalization_rows(store)) == 3
@@ -251,7 +284,7 @@ def test_resume_is_duplicate_free_and_complete(tmp_path: Path, fmt: str) -> None
 def test_worker_records_a_canonicalization_error(tmp_path: Path) -> None:
     # A non-structure input makes the worker fail; the failure becomes an error result,
     # and the writer stores exactly one error CanonicalizationRecord (no derived refs).
-    result = _canonicalize_one(("some.cif", object(), "original-cid", None, False))
+    result = _canonicalize_one(("some.cif", object(), "original-cid", None, False, 64))
     assert result.error is not None
     assert result.canonical is None and result.protostructure_record is None
 
@@ -259,13 +292,33 @@ def test_worker_records_a_canonicalization_error(tmp_path: Path) -> None:
 
     database = tmp_path / "errors.sqlite"
     with Backend.sqlite(database) as backend:
-        store = SqlStore(backend, entry_records=entry_records())
+        store = SqlStore(backend, entry_records=entry_records(), entry_ids=entry_id_scheme())
         written, errors = _write_batch(store, [(None, result)])
         assert (written, errors) == (1, 1)
         rows = _canonicalization_rows(store)
         assert len(rows) == 1
         assert rows[0].error == result.error
         assert rows[0].canonical_content_id is None
+
+
+def test_worker_skips_large_asu_before_canonicalization(monkeypatch: pytest.MonkeyPatch) -> None:
+    import build_cod.canonicalize as canonicalize_module
+
+    class FakeView:
+        def __init__(self, _record) -> None:
+            pass
+
+        def unview(self):
+            return type("Structure", (), {"wyckoff_sites": (object(), object())})()
+
+    monkeypatch.setattr(canonicalize_module, "ASUStructureView", FakeView)
+    monkeypatch.setattr(
+        canonicalize_module,
+        "canonical_asu",
+        lambda *_args, **_kwargs: pytest.fail("oversized structure reached canonical_asu"),
+    )
+    result = _canonicalize_one(("large.cif", object(), "original-cid", None, False, 1))
+    assert result.error == "canonicalization skipped: asymmetric-unit site count 2 exceeds limit 1"
 
 
 def test_worker_canonicalizes_once_then_normalizes_chirality_for_derivation(
@@ -331,7 +384,7 @@ def test_worker_canonicalizes_once_then_normalizes_chirality_for_derivation(
         monkeypatch.setattr(canonicalize_module, "ProtostructureView", spy_proto_view)
         monkeypatch.setattr(canonicalize_module, "PrototypeView", spy_prototype_view)
 
-        result = _canonicalize_one((source, imported.structure, imported.structure.id, 0.01, False))
+        result = _canonicalize_one((source, imported.structure, imported.structure.id, 0.01, False, 64))
 
     assert result.error is None
     assert len(canonical_calls) == 1
@@ -344,8 +397,8 @@ def test_worker_canonicalizes_once_then_normalizes_chirality_for_derivation(
     assert proto_view_inputs == [prototype_canonical]
     assert prototype_view_inputs == [prototype_canonical]
     assert result.canonical_content_id == content_id(canonical)
-    assert result.protostructure_content_id == result.protostructure_record.id
-    assert result.prototype_content_id == result.prototype_record.id
+    assert result.protostructure_content_id == content_id(result.protostructure_record)
+    assert result.prototype_content_id == content_id(result.prototype_record)
     assert result.protostructure_record.representative is None
     assert result.protostructure_record.discriminator is None
     assert result.prototype_record.representative is None
@@ -385,41 +438,50 @@ def test_retry_errors_converges_after_a_successful_retry(tmp_path: Path) -> None
     cif = tmp_path / "COD" / "cif"
     cif.mkdir(parents=True)
     (cif / "nacl_a.cif").write_text(NACL_P1, encoding="utf-8")
-    database = tmp_path / "cod.sqlite"
-    assert build_main([str(tmp_path / "COD"), "--format", "sqlite", "--output", str(database)]) == 0
+    source = tmp_path / "cod.sqlite"
+    canonical = tmp_path / "cod-canonical.sqlite"
+    assert build_main([str(tmp_path / "COD"), "--format", "sqlite", "--output", str(source)]) == 0
 
-    backend, SqlStore = _open_store(database, "sqlite")
-    with backend:
-        store = SqlStore(backend, entry_records=entry_records())
-        searcher = store.searcher()
+    source_backend, SqlStore = _open_store(source, "sqlite")
+    destination_backend, _SqlStore = _open_store(canonical, "sqlite")
+    with source_backend, destination_backend:
+        source_store = SqlStore(source_backend, entry_records=entry_records())
+        destination_store = SqlStore(destination_backend, entry_records=entry_records())
+        searcher = source_store.searcher()
         variable = searcher.variable(StructureImportRecord)
         searcher.output(variable.source, "source")
         ((source,),) = [values for values, _names in searcher]
 
         # Seed a failed canonicalization for the one import, as pass 2 would on an error.
         failure = _Result(source, "orig-cid", "boom", None, None, None, None, None, None, False)
-        _write_batch(store, [(None, failure)])
-        assert [item[0] for item in _pending_work(store, retry_errors=True)] == [source]
-        assert _pending_work(store, retry_errors=False) == []  # plain resume skips a failed row
+        _write_batch(destination_store, [(None, failure)])
+        assert [item[0] for item in _pending_work(source_store, destination_store, retry_errors=True)] == [source]
+        assert _pending_work(source_store, destination_store, retry_errors=False) == []
 
         # Retry it for real: canonicalize in-process and replace the error row.
-        work = _pending_work(store, retry_errors=True)
-        ((_tag, worker_input),) = list(_iter_inputs(store, work, None, True))
+        work = _pending_work(source_store, destination_store, retry_errors=True)
+        ((_tag, worker_input),) = list(_iter_inputs(source_store, work, None, True, 64))
         result = _canonicalize_one(worker_input)
         assert result.error is None
-        _write_batch(store, [(work[0][2], result)])
+        _write_batch(destination_store, [(work[0][2], result)])
 
         # Convergence: neither a further retry nor a plain run has anything left to do.
-        assert _pending_work(store, retry_errors=True) == []
-        assert _pending_work(store, retry_errors=False) == []
+        assert _pending_work(source_store, destination_store, retry_errors=True) == []
+        assert _pending_work(source_store, destination_store, retry_errors=False) == []
 
-        rows = _canonicalization_rows(store)
+        rows = _canonicalization_rows(destination_store)
         assert len(rows) == 2  # raw count includes the superseded error row
         blessed = len({row.source for row in rows if row.error is None})
         assert blessed == 1  # the retry-proof current-state count
 
     # A second --retry-errors run over the CLI must add nothing (no re-canonicalization).
-    assert canon_main([str(database), "--format", "sqlite", "--retry-errors", "--lift"]) == 0
+    assert (
+        canon_main(
+            [str(tmp_path / "cod.sqlite"), "--output", str(canonical), "--format", "sqlite", "--retry-errors", "--lift"]
+        )
+        == 0
+    )
+    backend, SqlStore = _open_store(canonical, "sqlite")
     with backend:
         store = SqlStore(backend, entry_records=entry_records())
         assert len(_canonicalization_rows(store)) == 2
