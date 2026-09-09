@@ -298,12 +298,7 @@ def _completed_groups(store: SqlStore, record_type: type) -> set[str]:
 def _pending_groups(source_store: SqlStore, output_store: SqlStore) -> list[tuple[str, str, set[str]]]:
     """List ``(kind, wyckoff_content_id, member_cids)`` for groups still needing clustering.
 
-    Ordered smallest-group-first: the vast majority of groups are singletons/tiny and clear
-    almost instantly, so progress and the output database fill steadily and the handful of very
-    popular prototypes (hundreds of members, expensive to cluster) run last. That also makes an
-    interrupted run resume-friendly -- a kill during the expensive tail keeps every cheap result
-    already written -- and avoids a few big groups landing in the bounded window up front and
-    stalling every worker before anything completes. Ties break on the group key for determinism.
+    Preserve source discovery order within each catalog, without prioritizing group size.
     """
     prototype_groups, protostructure_groups = _group_members(source_store)
     work: list[tuple[str, str, set[str]]] = []
@@ -315,7 +310,6 @@ def _pending_groups(source_store: SqlStore, output_store: SqlStore) -> list[tupl
         for wyckoff_content_id, member_cids in groups.items():
             if wyckoff_content_id not in done:
                 work.append((kind, wyckoff_content_id, member_cids))
-    work.sort(key=lambda item: (len(item[2]), item[0], item[1]))
     return work
 
 
@@ -504,7 +498,7 @@ def main(argv: list[str] | None = None) -> int:
         largest = max((len(member_cids) for _kind, _wyk, member_cids in work), default=0)
         prognosis = CompletionPrognosis(total)
         print(
-            f"Clustering {total} remaining Wyckoff group(s) (smallest first; largest has {largest} "
+            f"Clustering {total} remaining Wyckoff group(s) (largest has {largest} "
             f"members) from {source_path} into {output_path} at delta {args.delta} (max-coverage up to "
             f"{args.max_coverage_size} members, greedy-leader beyond) with {args.workers} worker(s)...",
             flush=True,

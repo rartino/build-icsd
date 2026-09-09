@@ -138,9 +138,10 @@ fallback. In the COD corpus almost all groups are tiny (the great majority are s
 only a couple of dozen very popular prototypes hit the cap; raise it to push more groups through
 max-coverage at rising cost, or set it to 1 to force greedy-leader everywhere.
 
-Groups are processed smallest-first, so the singleton majority clears quickly and the few
-expensive prototypes run last. Each group's structures are fetched inside the worker that
-clusters it — the source is opened `read_only` (DuckDB `READ_ONLY` access mode) so every worker
+Groups follow source discovery order within each catalog, without sorting by size. This
+avoids deliberately deferring expensive groups until the end; elapsed-rate estimates can
+still fluctuate because groups have very different costs. Each group's structures are fetched
+inside the worker that clusters it — the source is opened `read_only` (DuckDB `READ_ONLY` access mode) so every worker
 reads it concurrently — rather than serially in the main process. The distinct records are
 written through a single `bulk_ingest` (`executemany` batched appends, ~17× faster than
 per-record `save` on DuckDB, whose slow path is row-by-row nested inserts); `--ingest-chunk`
