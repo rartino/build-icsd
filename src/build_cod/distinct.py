@@ -148,10 +148,13 @@ def _cluster_leader(values: list[Any], delta: float) -> list[tuple[int, int]]:
     representatives are pairwise dissimilar. Cost is O(n*k) ``similar`` calls (n members, k
     classes) -- the streaming choice for large groups where an all-pairs pass is too expensive.
     """
+    from httk.atomistic.symmetry.comparison_cache import StructureComparisonCache
+
+    cache = StructureComparisonCache(max_structures=max(1, 2 * len(values)))
     leaders: list[list[int]] = []  # [representative index, member count]
     for index in range(len(values)):
         for leader in leaders:
-            if values[leader[0]].similar(values[index], delta, use_numpy=True):
+            if values[leader[0]].similar(values[index], delta, use_numpy=True, cache=cache):
                 leader[1] += 1
                 break
         else:
@@ -169,13 +172,16 @@ def _cluster_cover(values: list[Any], delta: float) -> list[tuple[int, int]]:
     -- and more representative -- classes than greedy-leader near the ``delta`` boundary. Only
     viable for bounded n; the caller falls back to :func:`_cluster_leader` above a size cap.
     """
+    from httk.atomistic.symmetry.comparison_cache import StructureComparisonCache
+
     count = len(values)
+    cache = StructureComparisonCache(max_structures=max(1, 2 * count))
     # Closed neighborhoods over the symmetric similar-graph; structure_delta is symmetric, so each
     # unordered pair is evaluated once.
     neighbors: list[set[int]] = [{index} for index in range(count)]
     for i in range(count):
         for j in range(i + 1, count):
-            if values[i].similar(values[j], delta, use_numpy=True):
+            if values[i].similar(values[j], delta, use_numpy=True, cache=cache):
                 neighbors[i].add(j)
                 neighbors[j].add(i)
     uncovered = set(range(count))
