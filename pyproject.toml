@@ -9,7 +9,7 @@ description = "Build an httk structure database from a COD CIF tree."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-  "httk-atomistic>=0.2.0,<0.3",
+  "httk-atomistic[numpy]>=0.2.0,<0.3",
   "httk-serve>=0.2.0,<0.3",
   "httk-store[db]>=0.2.0,<0.3",
 ]

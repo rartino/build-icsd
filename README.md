@@ -119,6 +119,14 @@ erased to a `Prototype` for the prototype catalog) and clusters the group so the
 representatives are pairwise dissimilar. `--delta` is the similarity budget: total Cartesian
 atom travel (endpoint-cell length units, ~ångström) below which two members are one class.
 
+Geometrical comparisons use temporary NumPy float64 arrays (provided by the
+*httk-atomistic* `numpy` extra). This accelerates distance calculations while preserving
+the skew-cell periodic-image search and minimum-cost atom matching. Decisions at
+near-equal distances or close to `--delta` can vary with floating-point rounding.
+Source structures, chosen representatives, and stored content identities remain exact.
+Resuming skips already stored groups as usual; adopting this comparison mode requires
+no database migration and does not recluster those groups.
+
 Clustering is a **size-capped hybrid**. A group with at most `--max-coverage-size` members
 (default 150) uses **greedy max-coverage**: it builds the full pairwise similarity graph
 (O(n²) comparisons) and repeatedly makes the still-uncovered member covering the most others a

@@ -151,7 +151,7 @@ def _cluster_leader(values: list[Any], delta: float) -> list[tuple[int, int]]:
     leaders: list[list[int]] = []  # [representative index, member count]
     for index in range(len(values)):
         for leader in leaders:
-            if values[leader[0]].similar(values[index], delta):
+            if values[leader[0]].similar(values[index], delta, use_numpy=True):
                 leader[1] += 1
                 break
         else:
@@ -175,7 +175,7 @@ def _cluster_cover(values: list[Any], delta: float) -> list[tuple[int, int]]:
     neighbors: list[set[int]] = [{index} for index in range(count)]
     for i in range(count):
         for j in range(i + 1, count):
-            if values[i].similar(values[j], delta):
+            if values[i].similar(values[j], delta, use_numpy=True):
                 neighbors[i].add(j)
                 neighbors[j].add(i)
     uncovered = set(range(count))
