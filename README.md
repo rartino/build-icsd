@@ -110,7 +110,7 @@ destination. A freshly built import database contains no pass-2 tables.
 build-cod-distinct database/cod-canonical.duckdb --output database/cod-distinct.duckdb --stats
 build-cod-distinct database/cod-canonical.duckdb --delta 0.5 --max-coverage-size 200
 build-cod-distinct database/cod-canonical.duckdb --max-coverage-size 1    # force greedy-leader
-build-cod-distinct database/cod-canonical.duckdb --grid-dimensions 2 --grid-strategy occupancy
+build-cod-distinct database/cod-canonical.duckdb --grid-dimensions 2 --grid-strategy variance
 ```
 
 The Wyckoff-only pass-2 `Prototype`/`Protostructure` carry no coordinates, so *within* one
@@ -150,12 +150,13 @@ written through a single `bulk_ingest` (`executemany` batched appends, ~17× fas
 per-record `save` on DuckDB, whose slow path is row-by-row nested inserts); `--ingest-chunk`
 bounds its in-memory buffer.
 
-An optional conservative comparison grid can reduce the number of expensive geometry comparisons
+A conservative comparison grid can reduce the number of expensive geometry comparisons
 in large groups. `--grid-dimensions` selects one to three reduced geometry coordinates to index,
 and `--grid-strategy` selects those coordinates (`first`, `variance`, or `occupancy`). A pair is
 only skipped when the grid proves that it cannot be within the similarity budget; a false positive
 still goes through the normal comparison, so enabling the grid preserves the clustering result.
-The default is disabled (`--grid-dimensions 0`) until a dataset-specific strategy has been measured.
+The default uses two coordinates selected by variance (`--grid-dimensions 2 --grid-strategy variance`).
+Use `--grid-dimensions 0` to disable the grid.
 The grid is built per group and released with that group's comparison cache.
 
 Resume is the cross-database anti-join of pass 2: a Wyckoff group already present in the distinct
@@ -275,14 +276,14 @@ make distinct DISTINCT_DELTA=0.5   # wider geometric-similarity budget (~ångstr
 make distinct DISTINCT_MAX_COVERAGE_SIZE=200   # push more groups through greedy max-coverage
 ```
 
-The initial grid sweep favors two projections selected by variance. To try that
-configuration through the usual build target:
+The default uses two projections selected by variance, as favored by the initial
+grid sweep. The explicit equivalent of `make distinct` is:
 
 ```sh
 make distinct DISTINCT_GRID_DIMENSIONS=2 DISTINCT_GRID_STRATEGY=variance
 ```
 
-`DISTINCT_GRID_DIMENSIONS=0` disables the grid (the current default). The grid can
+`DISTINCT_GRID_DIMENSIONS=0` disables the grid. The grid can
 save comparisons in sparse groups while adding preparation cost in groups where
 it excludes few pairs. See [the benchmark results](benchmarks/README.md) for the
 measured strategies and a command to repeat the sweep on selected groups.

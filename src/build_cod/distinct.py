@@ -514,17 +514,17 @@ def _parser() -> argparse.ArgumentParser:
         "--grid-dimensions",
         type=int,
         choices=(0, 1, 2, 3),
-        default=0,
+        default=2,
         help=(
             "number of reduced geometry coordinates used by the conservative comparison grid "
-            "(0 disables it; default: 0)"
+            "(0 disables it; default: 2)"
         ),
     )
     parser.add_argument(
         "--grid-strategy",
         choices=("first", "variance", "occupancy"),
-        default="occupancy",
-        help="coordinate selection strategy for the comparison grid (default: occupancy)",
+        default="variance",
+        help="coordinate selection strategy for the comparison grid (default: variance)",
     )
     parser.add_argument("--workers", type=_positive_int, default=os.cpu_count() or 1)
     parser.add_argument("--limit", type=_positive_int, default=None, help="process at most this many groups")

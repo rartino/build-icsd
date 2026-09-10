@@ -159,6 +159,10 @@ Cl4 Cl 0.0 0.0 0.5
 
 def test_grid_cli_options_and_validation() -> None:
     parser = distinct._parser()
+    defaults = parser.parse_args(["source.duckdb"])
+    assert defaults.grid_dimensions == 2
+    assert defaults.grid_strategy == "variance"
+    assert parser.parse_args(["source.duckdb", "--grid-dimensions", "0"]).grid_dimensions == 0
     args = parser.parse_args(["source.duckdb", "--grid-dimensions", "3", "--grid-strategy", "first"])
     assert args.grid_dimensions == 3
     assert args.grid_strategy == "first"

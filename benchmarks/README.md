@@ -1,7 +1,9 @@
 # Distinct comparison benchmarks
 
 `bench_distinct.py` reads explicitly selected groups from the canonical DuckDB database,
-runs the complete clustering operation, and prints JSON timing and representative results.
+runs the complete clustering operation with the grid disabled, and prints JSON timing and
+representative results. To measure the current two-dimensional default, use
+`bench_distinct_grid.py --dimensions 2 --strategy variance` as shown below.
 It writes no source or output database. Run it in a fresh process for each implementation
 being compared, with the same group order and threshold:
 
@@ -89,7 +91,7 @@ group from 2.54 to 1.49 seconds. The 7-member group retained all 21 comparisons
 and slowed slightly (2.58 to 2.62 seconds). The earlier 38-site, 4-member group
 eliminated all six comparisons, but still needed about 36 seconds of preparation,
 versus about 43 seconds for unfiltered clustering. No whole-corpus speedup or ETA
-is inferred from this sample. The operational default remains dimension zero.
+is inferred from this sample. The operational default now uses two projections selected by variance.
 
 All ten sweep configurations selected identical representative IDs and member
 counts. A separate `--verify` run for two-dimensional variance also compared all
@@ -128,3 +130,131 @@ matching edges and representatives. JSON output includes comparison counts,
 index preparation time, indexed point count, selected axes, group-wide fallback
 reason, and process peak memory. Only occupied buckets are retained; point and
 image caps and a bounded query cache limit extra grid work and memory.
+
+## Stratified remeasurement with the two-dimensional default
+
+On 2026-09-10, the current pipeline was measured on 53 complete groups drawn
+from both catalogs. The source contains 105,276 prototype groups and 186,216
+protostructure groups; 253,992 of their combined 291,492 groups are singletons
+(87.1%). Sampling only comparison-heavy groups therefore misses most work items.
+
+The fixed sample is recorded in [grid_sample.csv](grid_sample.csv). Within each
+catalog, group IDs were sorted, then sampled with Python's `random.Random(20260910)`:
+six groups each of size 1, 2, and 3–5; four of size 6–20; three of size 21–150;
+and two above 150, or all available when fewer exist. There is only one
+protostructure group above 150, giving 53 sampled groups in total.
+
+Each configuration used a separate process, the same group order, one worker,
+`delta=0.1`, and a 512 MB read-only source connection. NumPy/OMP thread counts
+were fixed at one. Groups had a 120-second deadline. Times include fetching,
+value construction, preparation, comparisons, and representative construction;
+they exclude initial group enumeration and output database writes. Per-group
+caches are fresh; module caches may warm as they do in a production worker.
+
+| Members per group | Groups completing both runs | Grid disabled | 2D variance | Change in time |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 12 | 1.81 s | 2.01 s | Too short for a useful comparison |
+| 2–5 | 22 | 334.76 s | 337.89 s | +0.9% |
+| 6–150 | 9 | 310.01 s | 249.75 s | −19.4% |
+| Above 150 | 2 | 45.39 s | 36.33 s | −20.0% |
+| All completed pairs | 45 | 691.96 s | 625.97 s | −9.5% |
+
+The completed paired sample used 5,331 similarity calls without the grid and
+3,472 with it, a 34.9% reduction. All matching pairs, representative content IDs,
+and member counts were identical for these 45 groups. A further 176-member
+leader group completed in 60.70 seconds with the grid, while its unfiltered run
+exceeded 120 seconds; that group is excluded from the paired totals above.
+Seven groups exceeded the deadline in both configurations. Overall, 46 groups
+completed with the grid and 45 without it. Timeouts are recorded explicitly in
+[grid_remeasure.csv](grid_remeasure.csv), with unavailable measurements left blank.
+
+These are single-pass sample measurements. The group-size strata are deliberately
+oversampled, and the slow tail is truncated by the deadline. The 9.5% improvement
+is therefore not a whole-corpus speedup or a basis for updating the whole-run ETA.
+The measurements support the two-dimensional default for larger groups; they do
+not show a useful gain for the small groups. Dimension zero remains available.
+
+For all 46 completed grid groups, 475.94 of 686.67 seconds (69.3%) were charged to
+index preparation, including the reusable symmetry canonicalization that the
+unfiltered path otherwise performs inside similarity calls. Grid queries took
+only 1.37 seconds (0.2%). In the grid runs, the seven shared timeouts occurred during preparation,
+before any grid query or similarity call.
+
+Diagnostic profiling identified two preparation costs:
+
+- In the two-member SG 2 group `199d14a08a0d21a9474a0f0302ab62a42a32e40aca0967e4360ef2d051ce2d2e`,
+  canonicalization consumed 18.86 of 20.66 profiled seconds; normalizer-operation
+  application/validation consumed 17.87 seconds. There were 69,300 calls to
+  Wyckoff parameter matching. Profiling overhead increases these times; use the
+  unprofiled CSV for wall-time comparisons.
+- In the slow three-member SG 4 group `9ce8402c2aaaab1096ab351b9aae9d7ff37730dda99190a5048cf2ef01722ab4`,
+  continuous-origin selection consumed 23.76 of a 24.69-second partial profile.
+  This diagnostic was stopped after 25 seconds and is not a complete group time.
+
+The next algorithmic targets are to reduce repeated normalizer validation and
+origin searches, then share prepared normalizer variants between the index and
+surviving comparisons. Iterating grid candidate sets directly would remove some
+Python pair-loop work, but the measured query cost makes that a lower priority.
+
+Repeat the fixed sample from `build-cod`, running the configurations sequentially:
+
+```sh
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 PYTHONPATH=src \
+  ../.venv/bin/python benchmarks/bench_distinct_sample.py database/cod-canonical.duckdb \
+  --dimensions 2 --strategy variance > grid-2.jsonl
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 PYTHONPATH=src \
+  ../.venv/bin/python benchmarks/bench_distinct_sample.py database/cod-canonical.duckdb \
+  --dimensions 0 --strategy variance > grid-0.jsonl
+```
+
+The runner streams one JSON row per group, including completed matching pairs
+and representatives, phase timings, peak process RSS, or an explicit timeout.
+Use `--timeout 0` to allow every group to finish, or `--sample PATH` to supply a
+smaller CSV with the same columns. The source database is always opened read-only.
+
+## Certified normalizer preparation experiment
+
+A separate, opt-in experiment uses the existing trusted normalizer transformation
+path after certifying each `(space group, affine operation)` once. The certificate
+requires integral matrices in both directions, then checks exact conjugation of
+the complete wrapped affine-operation set, including translations. Operations
+that fail this conservative certificate retain full orbit validation. The
+certificate therefore also checks lattice preservation; finite point-group
+conjugation alone would be insufficient. Certificates are cached with fixed caps.
+This changes only the benchmark process, not production comparison behavior.
+
+Fresh baseline and experimental processes ran the same four prototype groups,
+with two-dimensional variance grids and the same group order:
+
+| Group | Current preparation | Certified preparation | Speedup |
+| --- | ---: | ---: | ---: |
+| Tetragonal, 7 members | 2.68 s | 2.38 s | 1.12× |
+| SG 15, 2 members | 6.71 s | 1.78 s | 3.76× |
+| SG 14, 2 members | 15.96 s | 5.08 s | 3.14× |
+| SG 2, 2 members | 6.37 s | 2.54 s | 2.51× |
+
+These are complete clustering times, including certification overhead. Matching
+pairs, representative IDs, and member counts were identical in all four groups;
+1,076 transformation applications used certified operations. Group IDs and raw
+times are in [grid_normalizer_experiment.csv](grid_normalizer_experiment.csv).
+This is promising evidence for the next implementation, not a whole-run forecast
+or validation across all space groups. Continuous-origin search remains a separate
+algorithmic target for the slow polar groups.
+
+To repeat, run the following command first with `--variant baseline`, then in a
+fresh process with `--variant certified`:
+
+```sh
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 PYTHONPATH=src \
+  ../.venv/bin/python benchmarks/bench_distinct_normalizer.py database/cod-canonical.duckdb \
+  --variant baseline \
+  --group 442ea717202c56035aaa5f77a10a44e887429287c34b03431dc52eb8ef09a798 \
+  --group 9d9bcc7075fd277fecf1354e39b03b21480914211b01ad36e832110bd2bbdf3b \
+  --group 46c836d020ca572df4ed2259a571fff9e7ccd3eccf49cc57475f10dcba00bf18 \
+  --group 199d14a08a0d21a9474a0f0302ab62a42a32e40aca0967e4360ef2d051ce2d2e
+```
+
+`--variant verify` runs both paths and asserts identical results, but warms
+module caches between them, so those paired timings should not be used to claim
+a speedup. Arbitrary rational transforms deliberately remain on the original
+validation path in this experiment.
