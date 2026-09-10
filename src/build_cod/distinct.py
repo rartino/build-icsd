@@ -24,6 +24,7 @@ output is skipped (that cross-database anti-join is the resume mechanism, exactl
 import argparse
 import logging
 import os
+import sys
 import time
 from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import FIRST_COMPLETED, Executor, ProcessPoolExecutor, wait
@@ -61,6 +62,12 @@ from build_cod.records import CanonicalizationRecord
 _DEFAULT_DELTA = 0.1
 _DEFAULT_MAX_COVERAGE_SIZE = 150
 _DEFAULT_INGEST_CHUNK = 5000
+_DEFAULT_COMMIT_EVERY = 5000
+_DEFAULT_WORKER_MEMORY_LIMIT = "512MB"
+# DuckDB does NOT count a transaction's uncommitted rows against memory_limit, so the whole-run
+# RSS is bounded by committing often (see --commit-every) rather than by this cap; the cap only
+# bounds the main process's evictable buffer pool over the growing output database.
+_MAIN_MEMORY_LIMIT = "2GB"
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -244,18 +251,36 @@ def _cluster_cover(
     return classes
 
 
-# Per-worker-process read-only source store, opened once by the pool initializer. Fetching each
-# group's structures inside the worker (rather than serially in the main feeder) parallelizes the
-# I/O across the pool -- the bulk of the corpus is singleton/tiny groups whose clustering is
-# trivial, so a single-threaded fetch would otherwise be the throughput ceiling. DuckDB READ_ONLY
-# access takes no write lock, so every worker opening the same file concurrently is safe.
+# Per-worker-process read-only source store, opened by the pool initializer. Fetching each group's
+# structures inside the worker (rather than serially in the main feeder) parallelizes the I/O
+# across the pool -- the bulk of the corpus is singleton/tiny groups whose clustering is trivial,
+# so a single-threaded fetch would otherwise be the throughput ceiling. DuckDB READ_ONLY access
+# takes no write lock, so every worker opening the same file concurrently is safe.
+#
+# A long-lived read-only store leaks a few MB per fetched group: several store/DuckDB caches
+# (the content-id -> sid identity map, hydrator references, connection state) only shrink inside a
+# transaction, which a read-only worker never runs. Rather than chase each cache, the pool caps a
+# worker process's lifetime at --worker-max-tasks groups (ProcessPoolExecutor max_tasks_per_child):
+# the process is replaced -- reopening the store via the initializer -- which frees everything.
+_DEFAULT_WORKER_MAX_TASKS = 200
 _WORKER_STORE: SqlStore | None = None
 
 
-def _init_worker(source_path: str, source_format: str) -> None:
-    """Open the read-only source store once per worker process (ProcessPoolExecutor initializer)."""
+def _init_worker(source_path: str, source_format: str, memory_limit: str) -> None:
+    """Open the read-only source store once per worker process (ProcessPoolExecutor initializer).
+
+    Each worker gets its own DuckDB connection, so its buffer pool must be capped: DuckDB grows the
+    pool toward its ``memory_limit`` as a worker touches more of the source, and summed over W
+    workers an uncapped per-process default (e.g. ``HTTK_DUCKDB_MEMORY_LIMIT``) blows the whole-run
+    RSS budget. These workers only do indexed point lookups, which need a tiny working set, so a
+    small cap costs nothing. Runs again for each replacement process spun up under max_tasks_per_child.
+    """
     global _WORKER_STORE
-    backend = Backend.sqlite(source_path) if source_format == "sqlite" else Backend.duckdb(source_path, read_only=True)
+    backend = (
+        Backend.sqlite(source_path)
+        if source_format == "sqlite"
+        else Backend.duckdb(source_path, read_only=True, memory_limit=memory_limit)
+    )
     backend.__enter__()  # left open for the process lifetime; the pool discards the process on shutdown
     _WORKER_STORE = SqlStore(backend, entry_records=entry_records(), entry_ids=entry_id_scheme())
 
@@ -469,6 +494,66 @@ def _save_records(bulk: Any, batch: list[_GroupResult]) -> int:
     return written
 
 
+def _stream_ingest(
+    output_store: SqlStore,
+    results: Iterable[tuple[Any, _GroupResult]],
+    *,
+    ingest_chunk: int,
+    commit_every: int,
+    progress_every: int,
+    total: int,
+    prognosis: CompletionPrognosis,
+) -> tuple[int, int, int, int]:
+    """Persist clustered results through periodic ``finalize="parity"`` bulk-ingests.
+
+    A single ``deferred`` ingest keeps an in-memory occurrence index for the whole stream (and a
+    single ``parity`` transaction keeps every uncommitted row), so a full COD pass exhausts memory.
+    Instead a fresh parity ingest is opened per ``commit_every`` groups: parity flushes each
+    ``ingest_chunk`` to the database and clears its buffers, and each commit releases the
+    transaction's memory *and* makes those groups durable -- so memory stays bounded and an
+    interrupted run resumes from the last committed batch (the pass-2 anti-join skips it).
+
+    :return: ``(processed, written, errors, leader_fallbacks)``.
+    """
+    processed = written = errors = leader_fallbacks = 0
+
+    def _open() -> tuple[Any, Any]:
+        manager = output_store.bulk_ingest(finalize="parity", chunk_size=ingest_chunk, track_sids=False)
+        return manager, manager.__enter__()
+
+    manager, bulk = _open()
+    open_ingest = True
+    since_commit = 0
+    try:
+        for _tag, result in results:
+            written += _save_records(bulk, [result])
+            leader_fallbacks += result.method == "leader"
+            errors += result.error is not None
+            processed += 1
+            since_commit += 1
+            if since_commit >= commit_every:
+                open_ingest = False
+                manager.__exit__(None, None, None)  # durable commit; frees the transaction's memory
+                output_store._clear_identity_caches()  # drop the per-batch content-id -> sid map
+                manager, bulk = _open()
+                open_ingest = True
+                since_commit = 0
+            if processed % progress_every == 0:
+                progress = prognosis.snapshot(processed)
+                print(
+                    f"Clustered {processed}/{total}; distinct {written}; elapsed {progress.elapsed:.1f}s; "
+                    f"rate {progress.rate:.1f}/s; {progress.prognosis}",
+                    flush=True,
+                )
+        open_ingest = False
+        manager.__exit__(None, None, None)
+    except BaseException:
+        if open_ingest:
+            manager.__exit__(*sys.exc_info())  # roll the open batch back, leaving prior commits durable
+        raise
+    return processed, written, errors, leader_fallbacks
+
+
 def _catalog_counts(store: SqlStore) -> tuple[int, int]:
     """Return the distinct prototype and protostructure row totals."""
     prototypes = store.searcher()
@@ -553,6 +638,26 @@ def _parser() -> argparse.ArgumentParser:
         help="coordinate selection strategy for the comparison grid (default: variance)",
     )
     parser.add_argument("--workers", type=_positive_int, default=os.cpu_count() or 1)
+    parser.add_argument(
+        "--worker-memory-limit",
+        default=_DEFAULT_WORKER_MEMORY_LIMIT,
+        help=(
+            "DuckDB memory_limit for each worker's read-only source connection (default: "
+            f"{_DEFAULT_WORKER_MEMORY_LIMIT}). Workers only do point lookups, so the cap can be small; "
+            "it must be, since W workers each grow a buffer pool toward this and the whole-run RSS is "
+            "guarded. Ignored for the SQLite source format"
+        ),
+    )
+    parser.add_argument(
+        "--worker-max-tasks",
+        type=_positive_int,
+        default=_DEFAULT_WORKER_MAX_TASKS,
+        help=(
+            "replace each worker process after this many groups (default: "
+            f"{_DEFAULT_WORKER_MAX_TASKS}); the read-only store leaks a few MB per group, so this caps "
+            "each worker's RSS. Lower it if the whole-run memory guard still trips"
+        ),
+    )
     parser.add_argument("--limit", type=_positive_int, default=None, help="process at most this many groups")
     parser.add_argument("--progress-every", type=_positive_int, default=1000)
     parser.add_argument(
@@ -560,9 +665,18 @@ def _parser() -> argparse.ArgumentParser:
         type=_positive_int,
         default=_DEFAULT_INGEST_CHUNK,
         help=(
-            "records the bulk-ingest buffers before an executemany flush (default: "
-            f"{_DEFAULT_INGEST_CHUNK}); bounds memory. The whole run is one ingest, so results are "
-            "durable only when it finishes -- an interrupted run re-clusters from the last complete run"
+            "records the bulk-ingest buffers before an executemany flush to the database "
+            f"(default: {_DEFAULT_INGEST_CHUNK}); bounds the encoder's working memory"
+        ),
+    )
+    parser.add_argument(
+        "--commit-every",
+        type=_positive_int,
+        default=_DEFAULT_COMMIT_EVERY,
+        help=(
+            "groups per bulk-ingest transaction (default: "
+            f"{_DEFAULT_COMMIT_EVERY}); each commit bounds the uncommitted-row memory and is the "
+            "resume granularity -- a killed run loses at most this many groups' work"
         ),
     )
     parser.add_argument("--stats", action="store_true", help="print distinct counts when finished")
@@ -594,9 +708,15 @@ def main(argv: list[str] | None = None) -> int:
     source_format = _resolve_format(source_path, args.database_format)
     output_format = _resolve_format(output_path, args.database_format)
     source_database = (
-        Backend.sqlite(source_path) if source_format == "sqlite" else Backend.duckdb(source_path, read_only=True)
+        Backend.sqlite(source_path)
+        if source_format == "sqlite"
+        else Backend.duckdb(source_path, read_only=True, memory_limit=_MAIN_MEMORY_LIMIT)
     )
-    output_database = Backend.sqlite(output_path) if output_format == "sqlite" else Backend.duckdb(output_path)
+    output_database = (
+        Backend.sqlite(output_path)
+        if output_format == "sqlite"
+        else Backend.duckdb(output_path, memory_limit=_MAIN_MEMORY_LIMIT)
+    )
 
     started = time.monotonic()
     processed = written = errors = leader_fallbacks = 0
@@ -623,7 +743,8 @@ def main(argv: list[str] | None = None) -> int:
         with ProcessPoolExecutor(
             max_workers=args.workers,
             initializer=_init_worker,
-            initargs=(str(source_path), source_format),
+            initargs=(str(source_path), source_format, args.worker_memory_limit),
+            max_tasks_per_child=args.worker_max_tasks,  # replace each worker periodically to cap its RSS
         ) as pool:
             tagged = _tagged_inputs(
                 work,
@@ -633,22 +754,15 @@ def main(argv: list[str] | None = None) -> int:
                 args.grid_strategy,
             )
             results = _bounded_results(pool, _cluster_group, tagged, window=args.workers * 2)
-            # One bulk-ingest for the whole run: the empty-store deferred path stages appends and
-            # builds indexes once at exit (repeated incremental ingests re-run a store-sized anti-join
-            # per batch and collapse throughput). track_sids is off -- nothing needs the minted sids.
-            with output_store.bulk_ingest(chunk_size=args.ingest_chunk, track_sids=False) as bulk:
-                for _tag, result in results:
-                    written += _save_records(bulk, [result])
-                    leader_fallbacks += result.method == "leader"
-                    errors += result.error is not None
-                    processed += 1
-                    if processed % args.progress_every == 0:
-                        progress = prognosis.snapshot(processed)
-                        print(
-                            f"Clustered {processed}/{total}; distinct {written}; elapsed {progress.elapsed:.1f}s; "
-                            f"rate {progress.rate:.1f}/s; {progress.prognosis}",
-                            flush=True,
-                        )
+            processed, written, errors, leader_fallbacks = _stream_ingest(
+                output_store,
+                results,
+                ingest_chunk=args.ingest_chunk,
+                commit_every=args.commit_every,
+                progress_every=args.progress_every,
+                total=total,
+                prognosis=prognosis,
+            )
 
         elapsed = max(time.monotonic() - started, 1e-9)
         print(

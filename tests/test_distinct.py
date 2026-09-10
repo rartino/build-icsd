@@ -134,7 +134,7 @@ def test_distinct_records_persist_representative_coordinates(tmp_path: Path) -> 
     database = tmp_path / "cod-distinct.sqlite"
     with Backend.sqlite(database) as backend:
         store = SqlStore(backend, entry_records={})
-        with store.bulk_ingest(track_sids=False) as bulk:
+        with store.bulk_ingest(finalize="parity", track_sids=False) as bulk:
             assert _save_records(bulk, [result]) == 1
         assert _catalog_counts(store) == (1, 0)
 
@@ -162,11 +162,43 @@ def test_save_records_appends_across_ingests_and_skips_errors(tmp_path: Path) ->
     with Backend.sqlite(tmp_path / "cod-distinct.sqlite") as backend:
         store = SqlStore(backend, entry_records={})
         # First ingest writes the tables (empty-store path); the error contributes nothing.
-        with store.bulk_ingest(track_sids=False) as bulk:
+        with store.bulk_ingest(finalize="parity", track_sids=False) as bulk:
             assert _save_records(bulk, [_result("5.60"), error, _result("5.70")]) == 2
         # A second ingest appends onto the now-populated store (incremental path).
-        with store.bulk_ingest(track_sids=False) as bulk:
+        with store.bulk_ingest(finalize="parity", track_sids=False) as bulk:
             assert _save_records(bulk, [_result("5.80"), error]) == 1
+        assert _catalog_counts(store) == (3, 0)
+
+
+def test_stream_ingest_commits_periodically_and_persists_all(tmp_path: Path) -> None:
+    pytest.importorskip("spglib")
+    from httk.store import Backend, SqlStore
+
+    from build_cod.distinct import _stream_ingest
+    from build_cod.progress import CompletionPrognosis
+
+    def _result(cid: str) -> object:
+        value = _build_value("prototype", _rocksalt(cid))
+        bare = _bare_record("prototype", value)
+        record = _distinct_record("prototype", content_id(bare), cid, 1, value)
+        return distinct._GroupResult("prototype", content_id(bare), (record,), None, "cover", bare)
+
+    results = [(None, _result(a)) for a in ("5.60", "5.70", "5.80")]
+    results.append((None, distinct._GroupResult("prototype", "wyk-bad", (), "boom", None)))
+
+    with Backend.sqlite(tmp_path / "cod-distinct.sqlite") as backend:
+        store = SqlStore(backend, entry_records={})
+        # commit_every=1 forces a separate parity ingest (and durable commit) per group.
+        processed, written, errors, leaders = _stream_ingest(
+            store,
+            results,
+            ingest_chunk=2,
+            commit_every=1,
+            progress_every=100,
+            total=4,
+            prognosis=CompletionPrognosis(4),
+        )
+        assert (processed, written, errors, leaders) == (4, 3, 1, 0)
         assert _catalog_counts(store) == (3, 0)
 
 

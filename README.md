@@ -164,8 +164,8 @@ Resume uses a cross-database anti-join: a bare group with completed distinct-res
 skipped. Each successful group stores its bare parent and all refined results within the same
 bulk-ingest transaction. The worker verifies that every member projects to the group's bare
 content ID before returning results. A bare parent alone does not mark a group complete.
-The whole pass commits in one bulk-ingest transaction. An interruption leaves previously
-completed runs intact; failed groups remain pending for a later run.
+Transactions commit every `--commit-every` groups (default 5000), preserving prior committed
+batches on interruption. Failed groups remain pending for a later run.
 
 ## The headline queries
 
