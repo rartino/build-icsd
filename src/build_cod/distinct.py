@@ -141,19 +141,41 @@ def _build_value(kind: str, structure_record: Any) -> Any:
     return protostructure if kind == _KIND_PROTOSTRUCTURE else PrototypeView(protostructure).unview()
 
 
-def _cluster_leader(values: list[Any], delta: float) -> list[tuple[int, int]]:
+def _comparison_grid(values: list[Any], delta: float, *, dimensions: int, strategy: str, cache: Any) -> Any:
+    """Build a group's optional conservative comparison grid."""
+    if not dimensions or len(values) < 2:
+        return None
+    from httk.atomistic.symmetry.comparison_grid import StructureComparisonGrid
+
+    return StructureComparisonGrid(values, delta, dimensions=dimensions, strategy=strategy, cache=cache)
+
+
+def _cluster_leader(
+    values: list[Any],
+    delta: float,
+    *,
+    cache: Any = None,
+    grid: Any = None,
+    grid_dimensions: int = 0,
+    grid_strategy: str = "occupancy",
+) -> list[tuple[int, int]]:
     """Greedy-leader clustering: return ``(representative_index, member_count)`` per kept class.
 
     A member starts a new class only when it is ``similar`` to no kept representative, so the
     representatives are pairwise dissimilar. Cost is O(n*k) ``similar`` calls (n members, k
     classes) -- the streaming choice for large groups where an all-pairs pass is too expensive.
     """
-    from httk.atomistic.symmetry.comparison_cache import StructureComparisonCache
+    if cache is None:
+        from httk.atomistic.symmetry.comparison_cache import StructureComparisonCache
 
-    cache = StructureComparisonCache(max_structures=max(1, 2 * len(values)))
+        cache = StructureComparisonCache(max_structures=max(1, 2 * len(values)))
+    if grid is None:
+        grid = _comparison_grid(values, delta, dimensions=grid_dimensions, strategy=grid_strategy, cache=cache)
     leaders: list[list[int]] = []  # [representative index, member count]
     for index in range(len(values)):
         for leader in leaders:
+            if grid is not None and not grid.might_match(leader[0], index):
+                continue
             if values[leader[0]].similar(values[index], delta, use_numpy=True, cache=cache):
                 leader[1] += 1
                 break
@@ -162,7 +184,15 @@ def _cluster_leader(values: list[Any], delta: float) -> list[tuple[int, int]]:
     return [(leader[0], leader[1]) for leader in leaders]
 
 
-def _cluster_cover(values: list[Any], delta: float) -> list[tuple[int, int]]:
+def _cluster_cover(
+    values: list[Any],
+    delta: float,
+    *,
+    cache: Any = None,
+    grid: Any = None,
+    grid_dimensions: int = 0,
+    grid_strategy: str = "occupancy",
+) -> list[tuple[int, int]]:
     """Greedy max-coverage clustering: return ``(representative_index, member_count)`` per class.
 
     Builds the full pairwise ``similar`` graph (O(n^2) ``structure_delta`` calls), then repeatedly
@@ -172,15 +202,20 @@ def _cluster_cover(values: list[Any], delta: float) -> list[tuple[int, int]]:
     -- and more representative -- classes than greedy-leader near the ``delta`` boundary. Only
     viable for bounded n; the caller falls back to :func:`_cluster_leader` above a size cap.
     """
-    from httk.atomistic.symmetry.comparison_cache import StructureComparisonCache
-
     count = len(values)
-    cache = StructureComparisonCache(max_structures=max(1, 2 * count))
+    if cache is None:
+        from httk.atomistic.symmetry.comparison_cache import StructureComparisonCache
+
+        cache = StructureComparisonCache(max_structures=max(1, 2 * count))
+    if grid is None:
+        grid = _comparison_grid(values, delta, dimensions=grid_dimensions, strategy=grid_strategy, cache=cache)
     # Closed neighborhoods over the symmetric similar-graph; structure_delta is symmetric, so each
     # unordered pair is evaluated once.
     neighbors: list[set[int]] = [{index} for index in range(count)]
     for i in range(count):
         for j in range(i + 1, count):
+            if grid is not None and not grid.might_match(i, j):
+                continue
             if values[i].similar(values[j], delta, use_numpy=True, cache=cache):
                 neighbors[i].add(j)
                 neighbors[j].add(i)
@@ -229,7 +264,7 @@ def _fetch_members(cids: tuple[str, ...]) -> list[tuple[str, Any]]:
 
 
 def _cluster_group(
-    item: tuple[str, str, tuple[str, ...], float, int],
+    item: tuple[str, str, tuple[str, ...], float, int] | tuple[str, str, tuple[str, ...], float, int, int, str],
 ) -> _GroupResult:
     """Fetch one Wyckoff group's structures and cluster them into distinct representatives.
 
@@ -238,13 +273,35 @@ def _cluster_group(
     greedy max-coverage; larger groups fall back to greedy-leader so a very popular prototype's
     O(n^2) pass never dominates the build.
     """
-    kind, wyckoff_content_id, cids, delta, max_coverage_size = item
+    if len(item) == 5:
+        kind, wyckoff_content_id, cids, delta, max_coverage_size = item
+        grid_dimensions = 0
+        grid_strategy = "occupancy"
+    else:
+        (
+            kind,
+            wyckoff_content_id,
+            cids,
+            delta,
+            max_coverage_size,
+            grid_dimensions,
+            grid_strategy,
+        ) = item
     try:
+        from httk.atomistic.symmetry.comparison_cache import StructureComparisonCache
+
         members = _fetch_members(cids)
         values = [_build_value(kind, record) for _cid, record in members]
         member_cids = [cid for cid, _record in members]
         method = "cover" if len(values) <= max_coverage_size else "leader"
-        classes = (_cluster_cover if method == "cover" else _cluster_leader)(values, delta)
+        cache = StructureComparisonCache(max_structures=max(1, 2 * len(values)))
+        classes = (_cluster_cover if method == "cover" else _cluster_leader)(
+            values,
+            delta,
+            cache=cache,
+            grid_dimensions=grid_dimensions,
+            grid_strategy=grid_strategy,
+        )
         records = tuple(
             _distinct_record(kind, wyckoff_content_id, member_cids[index], member_count, values[index])
             for index, member_count in classes
@@ -320,8 +377,14 @@ def _pending_groups(source_store: SqlStore, output_store: SqlStore) -> list[tupl
 
 
 def _tagged_inputs(
-    work: list[tuple[str, str, set[str]]], delta: float, max_coverage_size: int
-) -> Iterator[tuple[None, tuple[str, str, tuple[str, ...], float, int]]]:
+    work: list[tuple[str, str, set[str]]],
+    delta: float,
+    max_coverage_size: int,
+    grid_dimensions: int = 0,
+    grid_strategy: str = "occupancy",
+) -> Iterator[
+    tuple[None, tuple[str, str, tuple[str, ...], float, int] | tuple[str, str, tuple[str, ...], float, int, int, str]]
+]:
     """Yield one lightweight worker input per group -- just the sorted content ids, no structures.
 
     The structures are fetched inside the worker (:func:`_fetch_members`), so the main process only
@@ -329,7 +392,11 @@ def _tagged_inputs(
     fixes a deterministic representative order.
     """
     for kind, wyckoff_content_id, member_cids in work:
-        yield None, (kind, wyckoff_content_id, tuple(sorted(member_cids)), delta, max_coverage_size)
+        base = (kind, wyckoff_content_id, tuple(sorted(member_cids)), delta, max_coverage_size)
+        if grid_dimensions:
+            yield None, (*base, grid_dimensions, grid_strategy)
+        else:
+            yield None, base
 
 
 def _bounded_results[TagT, InputT, ResultT](
@@ -443,6 +510,22 @@ def _parser() -> argparse.ArgumentParser:
             f"(default: {_DEFAULT_MAX_COVERAGE_SIZE}). Set to 1 to force greedy-leader everywhere"
         ),
     )
+    parser.add_argument(
+        "--grid-dimensions",
+        type=int,
+        choices=(0, 1, 2, 3),
+        default=0,
+        help=(
+            "number of reduced geometry coordinates used by the conservative comparison grid "
+            "(0 disables it; default: 0)"
+        ),
+    )
+    parser.add_argument(
+        "--grid-strategy",
+        choices=("first", "variance", "occupancy"),
+        default="occupancy",
+        help="coordinate selection strategy for the comparison grid (default: occupancy)",
+    )
     parser.add_argument("--workers", type=_positive_int, default=os.cpu_count() or 1)
     parser.add_argument("--limit", type=_positive_int, default=None, help="process at most this many groups")
     parser.add_argument("--progress-every", type=_positive_int, default=1000)
@@ -506,7 +589,8 @@ def main(argv: list[str] | None = None) -> int:
         print(
             f"Clustering {total} remaining Wyckoff group(s) (largest has {largest} "
             f"members) from {source_path} into {output_path} at delta {args.delta} (max-coverage up to "
-            f"{args.max_coverage_size} members, greedy-leader beyond) with {args.workers} worker(s)...",
+            f"{args.max_coverage_size} members, greedy-leader beyond; comparison grid dimensions "
+            f"{args.grid_dimensions}, strategy {args.grid_strategy}) with {args.workers} worker(s)...",
             flush=True,
         )
 
@@ -515,7 +599,13 @@ def main(argv: list[str] | None = None) -> int:
             initializer=_init_worker,
             initargs=(str(source_path), source_format),
         ) as pool:
-            tagged = _tagged_inputs(work, args.delta, args.max_coverage_size)
+            tagged = _tagged_inputs(
+                work,
+                args.delta,
+                args.max_coverage_size,
+                args.grid_dimensions,
+                args.grid_strategy,
+            )
             results = _bounded_results(pool, _cluster_group, tagged, window=args.workers * 2)
             # One bulk-ingest for the whole run: the empty-store deferred path stages appends and
             # builds indexes once at exit (repeated incremental ingests re-run a store-sized anti-join
