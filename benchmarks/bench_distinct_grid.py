@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any
 
 import duckdb
+from httk.atomistic.entries.structures import StructureEntry
+from httk.core.storage import content_id
 from httk.store import Backend, SqlStore
 
 from build_cod import distinct
@@ -28,18 +30,58 @@ def _positive_int(value: str) -> int:
 def _groups(
     source: Path, kind: str, keys: list[str], delta: float
 ) -> list[tuple[str, str, tuple[str, ...], float, int]]:
-    """Read selected group member ids without hydrating any structures."""
+    """Read selected group member ids from either canonicalization schema.
+
+    The local profiling database predates the bare/refined catalog split: its
+    ``cod_canonicalization`` columns still use ``prototype_content_id`` and
+    ``protostructure_content_id``.  The current pass-2 schema uses the corresponding
+    ``bare_*`` columns.  For the legacy database, the old group key cannot be passed to
+    the current distinct worker because the class split changes the content identity.
+    We therefore derive the current bare identity from one source structure after the
+    metadata query.  This is benchmark-only adaptation; the source remains read-only
+    and the measured worker still validates every member's identity.
+    """
+    if kind not in ("prototype", "protostructure"):
+        raise ValueError(f"unknown group kind: {kind}")
     work = []
     with duckdb.connect(str(source), read_only=True, config={"threads": 1, "memory_limit": "256MB"}) as conn:
+        columns = {row[0] for row in conn.execute("DESCRIBE cod_canonicalization").fetchall()}
+        bare_column = f"bare_{kind}_content_id"
+        legacy_column = f"{kind}_content_id"
+        if bare_column in columns:
+            group_column = bare_column
+            legacy = False
+        elif legacy_column in columns:
+            group_column = legacy_column
+            legacy = True
+        else:
+            raise ValueError(f"cod_canonicalization has neither {bare_column} nor {legacy_column}")
         for key in keys:
             rows = conn.execute(
                 f"SELECT DISTINCT canonical_content_id FROM cod_canonicalization "
-                f"WHERE error IS NULL AND {kind}_content_id=? ORDER BY canonical_content_id",
+                f"WHERE error IS NULL AND {group_column}=? ORDER BY canonical_content_id",
                 [key],
             ).fetchall()
             if not rows:
                 raise ValueError(f"group not found: {key}")
-            work.append((kind, key, tuple(row[0] for row in rows), delta, _MAX_COVERAGE_SIZE))
+            member_ids = tuple(row[0] for row in rows)
+            work.append((kind, key, member_ids, delta, _MAX_COVERAGE_SIZE))
+
+    if legacy:
+        # Open the store only after the metadata connection is closed.  DuckDB permits
+        # read-only connections, but keeping this ordering avoids competing per-process
+        # configuration while callers are assembling a benchmark run.
+        with Backend.duckdb(source, read_only=True, memory_limit="256MB") as backend:
+            store = SqlStore(backend, entry_records=entry_records(), entry_ids=entry_id_scheme())
+            adapted = []
+            for group_kind, _old_key, member_ids, group_delta, max_coverage in work:
+                record = store.fetch_entry(StructureEntry, member_ids[0], eager=True)
+                if record is None:
+                    raise ValueError(f"canonical structure missing from source: {member_ids[0]}")
+                value = distinct._build_value(group_kind, record)
+                current_key = content_id(distinct._bare_record(group_kind, value))
+                adapted.append((group_kind, current_key, member_ids, group_delta, max_coverage))
+            work = adapted
     return work
 
 

@@ -212,6 +212,12 @@ and representatives, phase timings, peak process RSS, or an explicit timeout.
 Use `--timeout 0` to allow every group to finish, or `--sample PATH` to supply a
 smaller CSV with the same columns. The source database is always opened read-only.
 
+The benchmark helpers accept both canonicalization layouts. A current database is queried
+through `bare_prototype_content_id` or `bare_protostructure_content_id`. For a local database
+created before the bare/refined catalog split, they query the legacy columns and derive the
+current bare content ID from one read-only structure before timing the worker. This migration
+adapter belongs only to the benchmark helpers; it does not modify or migrate the source database.
+
 ## Certified normalizer preparation experiment
 
 A separate, opt-in experiment uses the existing trusted normalizer transformation
@@ -258,3 +264,84 @@ OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 PYTHONPATH=src \
 module caches between them, so those paired timings should not be used to claim
 a speedup. Arbitrary rational transforms deliberately remain on the original
 validation path in this experiment.
+
+## Measuring extreme groups after the bare/refined split
+
+`bench_distinct_outliers.py` measures one selected group in a fresh process. It
+uses the same schema adapter as the grid benchmark and defaults to the production
+two-dimensional variance grid, `delta=0.1`, and a 600-second deadline:
+
+```sh
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 PYTHONPATH=src \
+  ../.venv/bin/python benchmarks/bench_distinct_outliers.py database/cod-canonical.duckdb \
+  --group de235b60862c9044f1173ef13460966c4eb40540ed21c79beced6bf4035d23d2 \
+  --timeout 600 --tag geometry-reuse
+```
+
+Use `--kind protostructure` for the species-assigned catalog, and `--timeout 0`
+to disable the deadline. Legacy group IDs work against a legacy source; use the
+new bare group IDs after rebuilding the canonical database. The source is opened
+read-only, and group selection/schema adaptation is excluded from the timing.
+
+JSON output contains complete matching pairs and representative IDs, or an explicit
+timeout with partial counters. Preparation counters count actual canonicalization,
+normalizer-image construction, and orbit-array construction, including starts that
+did not finish before a timeout. Cache hits do not increment these counters. The
+runner also reports phase timings, retained cache entries, array-payload bytes,
+CPU time, and process peak RSS. RSS includes the read-only database connection and
+Python/exact-object overhead; it is not the geometry-cache payload. This runner
+adds lightweight counters and timers but does not enable `cProfile`.
+
+The retained reuse changes cache subgroup graph closures by space-group number,
+share exact normalizer-image tuples between grid construction and alignment, and
+share read-only Cartesian arrays between the grid and surviving comparisons.
+`StructureComparisonCache` now defaults to 1,024 geometry entries with a separate
+16 MiB array-payload budget. An oversized geometry bypasses insertion without
+evicting useful entries. Normalizer tuples have a separate identity LRU using
+`max_structures`, so their insertion cannot evict canonicalization entries.
+The byte budget covers array payloads, not the exact objects, Python overhead,
+or the separately bounded grid index.
+
+These changes preserve the canonicalization algorithm and comparison order. With
+the per-group cache sized to two structure entries per member, a member's initial
+canonicalization is reused throughout that group. The same source can still be
+canonicalized independently in the prototype and protostructure catalogs. The
+cost of the first continuous-origin search remains a separate target.
+
+The 2026-09-10 sequential measurements used *httk-atomistic* `124d18e` as the
+baseline, after the bare/refined split, with *build-cod* `45f5c9d` and the existing
+local worker/checkpoint edits. Each column adds one change to the previous one.
+Runs used fresh processes, one worker, fixed NumPy/OMP thread counts of one, and
+the settings above. Full CI ran after the measurements.
+
+| Selected extreme | Baseline | Cache closures | Also cache normalizer images | Also share/bound geometry |
+| --- | ---: | ---: | ---: | ---: |
+| SG 225, 1,003 members, 8 atoms each | 136.62 s | 109.63 s | 69.94 s | 68.22 s |
+| SG 230, 175 members, 160 atoms each | 306.54 s | 300.40 s | 292.08 s | 222.94 s |
+| SG 225, 15 members, 672 atoms each | — | 67.51 s | 36.21 s | 34.97 s |
+| SG 210, 2 members, 3,824 atoms each | 68.19 s | — | — | 63.61 s |
+
+Missing cells were not measured. These are unprofiled whole-group times, not the
+earlier `cProfile` timings, and they do not support a whole-corpus ETA. The initial
+three phases used comparison/grid instrumentation; final-phase runs and both
+SG 210 runs also used the preparation counters described above. Small differences
+of a few percent should not be treated as reliable speedups from a single pass.
+All 13 runs completed within the deadline. Across every measured phase of each
+group, matching pairs, representative IDs and member counts, comparison counts,
+bare identity and clustering method were identical.
+
+All three changes were retained: closure reuse gives a clear gain in the
+1,003-member group; normalizer reuse gives large additional gains there and in
+the 672-atom group; geometry reuse reduces the 175-member group's time by a
+further 24%. That group's final cache holds 181 orbit geometries using 695,040
+bytes (0.66 MiB); peak process RSS is 504 MiB versus 503 MiB on the baseline.
+It performs exactly 175 canonicalizations and 175 normalizer-image builds.
+The other final runs likewise canonicalize each member once. Entry limits still
+permit geometry eviction: the 1,003-member group builds 3,887 orbit geometries,
+and the final geometry step's timing difference there is only about 1.7 seconds.
+
+The residual SG 230 workload spends 205.9 of 222.9 seconds in similarity calls.
+The polar groups that previously stalled inside their first continuous-origin
+canonicalization were not rerun in this reuse experiment; that algorithm is
+unchanged. Per-phase IDs, timings, counters and cache payloads are recorded in
+[reuse_outliers.csv](reuse_outliers.csv).

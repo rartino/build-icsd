@@ -6,7 +6,7 @@ import resource
 import time
 from pathlib import Path
 
-import duckdb
+from bench_distinct_grid import _groups
 from httk.store import Backend, SqlStore
 
 from build_cod import distinct
@@ -21,17 +21,10 @@ def main() -> None:
     parser.add_argument('--group', action='append', required=True)
     parser.add_argument('--delta', type=float, default=0.1)
     args = parser.parse_args()
-    work = []
-    with duckdb.connect(str(args.source), read_only=True, config={'threads': 1, 'memory_limit': '256MB'}) as conn:
-        for key in args.group:
-            rows = conn.execute(
-                f'SELECT DISTINCT canonical_content_id FROM cod_canonicalization '
-                f'WHERE error IS NULL AND {args.kind}_content_id=? ORDER BY canonical_content_id',
-                [key],
-            ).fetchall()
-            if not rows:
-                parser.error(f'group not found: {key}')
-            work.append((args.kind, key, tuple(row[0] for row in rows), args.delta, 150))
+    try:
+        work = _groups(args.source, args.kind, args.group, args.delta)
+    except ValueError as error:
+        parser.error(str(error))
     with Backend.duckdb(args.source, read_only=True, memory_limit='256MB') as backend:
         distinct._WORKER_STORE = SqlStore(backend, entry_records=entry_records(), entry_ids=entry_id_scheme())
         try:
