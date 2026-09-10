@@ -2,15 +2,15 @@
 
 Pass 2 (:mod:`build_cod.canonicalize`) discriminates structures by Wyckoff data only, so every
 COD entry sharing a space group and anonymous/assigned Wyckoff occupation collapses onto one
-``Prototype`` (element-agnostic) and one ``Protostructure`` (species-assigned), with no
+``BarePrototype`` (element-agnostic) and one ``BareProtostructure`` (species-assigned), with no
 coordinates retained. This pass reads those groups back, attaches each member structure's exact
 coordinates as a geometrical *representative*, and clusters the members so that only geometrically
 distinct representatives remain -- the ones for which :meth:`Prototype.similar` /
 :meth:`Protostructure.similar` returns ``False`` against every kept representative.
 
 Grouping is a cross-database read of the pass-2 ``cod_canonicalization`` rows: all canonical
-structures sharing a ``prototype_content_id`` form one prototype group, and likewise for
-``protostructure_content_id``. Each group is clustered independently in a worker with the
+structures sharing a ``bare_prototype_content_id`` form one prototype group, and likewise for
+``bare_protostructure_content_id``. Each group is clustered independently in a worker with the
 greedy-leader rule the user asked for: walk the members, and a member becomes a new kept
 representative exactly when it is ``similar`` to none of the representatives kept so far.
 
@@ -34,18 +34,24 @@ from typing import Any, ClassVar
 
 from httk.atomistic import (
     ASUStructureView,
+    BareProtostructureView,
+    BarePrototypeView,
     Protostructure,
     PrototypeView,
     normalize_chirality,
 )
 from httk.atomistic.entries.structures import StructureEntry
 from httk.atomistic.storage.records import (
+    BareProtostructureRecord,
+    BarePrototypeRecord,
     ProtostructureRecord,
     PrototypeRecord,
+    _bare_protostructure_record_from_value,
+    _bare_prototype_record_from_value,
     _protostructure_record_from_value,
     _prototype_record_from_value,
 )
-from httk.core.storage import StorageInfo
+from httk.core.storage import StorageInfo, content_id
 from httk.store import Backend, SqlStore
 
 from build_cod.layout import entry_id_scheme, entry_records
@@ -62,7 +68,7 @@ _LOGGER = logging.getLogger(__name__)
 class DistinctPrototypeRecord:
     """One geometrically distinct prototype kept for a Wyckoff-only prototype group.
 
-    :param wyckoff_content_id: The pass-2 Wyckoff-only ``Prototype`` content id (the group key).
+    :param bare_content_id: The pass-2 ``BarePrototype`` content id (the group key).
     :param structure_content_id: The canonical structure chosen as this class's representative.
     :param member_count: How many distinct group members collapsed onto this representative.
     :param representative: The ``Prototype`` record carrying the representative's coordinates.
@@ -71,10 +77,10 @@ class DistinctPrototypeRecord:
     __httk_storage__: ClassVar[StorageInfo] = StorageInfo(
         storage_name="cod_distinct_prototype",
         identity_name="cod_distinct_prototype",
-        indexes=(("wyckoff_content_id",),),
+        indexes=(("bare_content_id",),),
     )
 
-    wyckoff_content_id: str
+    bare_content_id: str
     structure_content_id: str
     member_count: int
     representative: PrototypeRecord
@@ -87,7 +93,7 @@ class DistinctPrototypeRecord:
 class DistinctProtostructureRecord:
     """One geometrically distinct protostructure kept for a Wyckoff-only protostructure group.
 
-    :param wyckoff_content_id: The pass-2 Wyckoff-only ``Protostructure`` content id (the group key).
+    :param bare_content_id: The pass-2 ``BareProtostructure`` content id (the group key).
     :param structure_content_id: The canonical structure chosen as this class's representative.
     :param member_count: How many distinct group members collapsed onto this representative.
     :param representative: The ``Protostructure`` record carrying the representative's coordinates.
@@ -96,10 +102,10 @@ class DistinctProtostructureRecord:
     __httk_storage__: ClassVar[StorageInfo] = StorageInfo(
         storage_name="cod_distinct_protostructure",
         identity_name="cod_distinct_protostructure",
-        indexes=(("wyckoff_content_id",),),
+        indexes=(("bare_content_id",),),
     )
 
-    wyckoff_content_id: str
+    bare_content_id: str
     structure_content_id: str
     member_count: int
     representative: ProtostructureRecord
@@ -109,7 +115,7 @@ class DistinctProtostructureRecord:
 
 
 def _validate_distinct(record: Any, representative_type: type) -> None:
-    for name in ("wyckoff_content_id", "structure_content_id"):
+    for name in ("bare_content_id", "structure_content_id"):
         value = getattr(record, name)
         if not isinstance(value, str) or not value:
             raise ValueError(f"{type(record).__name__} {name} must be a non-empty string")
@@ -128,10 +134,11 @@ class _GroupResult:
     """One picklable clustered-group outcome; ``error`` is set instead of ``records`` on failure."""
 
     kind: str
-    wyckoff_content_id: str
+    bare_content_id: str
     records: tuple[DistinctPrototypeRecord | DistinctProtostructureRecord, ...]
     error: str | None
     method: str | None  # "cover" or "leader" (which clustering ran), None on error
+    bare: BarePrototypeRecord | BareProtostructureRecord | None = None
 
 
 def _build_value(kind: str, structure_record: Any) -> Any:
@@ -139,6 +146,13 @@ def _build_value(kind: str, structure_record: Any) -> Any:
     structure = ASUStructureView(structure_record).unview()
     protostructure = Protostructure(representative=normalize_chirality(structure))
     return protostructure if kind == _KIND_PROTOSTRUCTURE else PrototypeView(protostructure).unview()
+
+
+def _bare_record(kind: str, value: Any) -> BarePrototypeRecord | BareProtostructureRecord:
+    """Project a refined value to its independently storable Wyckoff parent."""
+    if kind == _KIND_PROTOSTRUCTURE:
+        return _bare_protostructure_record_from_value(BareProtostructureView(value).unview())
+    return _bare_prototype_record_from_value(BarePrototypeView(value).unview())
 
 
 def _comparison_grid(values: list[Any], delta: float, *, dimensions: int, strategy: str, cache: Any) -> Any:
@@ -274,13 +288,13 @@ def _cluster_group(
     O(n^2) pass never dominates the build.
     """
     if len(item) == 5:
-        kind, wyckoff_content_id, cids, delta, max_coverage_size = item
+        kind, bare_content_id, cids, delta, max_coverage_size = item
         grid_dimensions = 0
         grid_strategy = "occupancy"
     else:
         (
             kind,
-            wyckoff_content_id,
+            bare_content_id,
             cids,
             delta,
             max_coverage_size,
@@ -293,6 +307,13 @@ def _cluster_group(
         members = _fetch_members(cids)
         values = [_build_value(kind, record) for _cid, record in members]
         member_cids = [cid for cid, _record in members]
+        if not values:
+            raise ValueError("no available structures in bare group")
+        bare = _bare_record(kind, values[0])
+        if content_id(bare) != bare_content_id or any(
+            content_id(_bare_record(kind, value)) != bare_content_id for value in values[1:]
+        ):
+            raise ValueError("structure bare content identity does not match its group key")
         method = "cover" if len(values) <= max_coverage_size else "leader"
         cache = StructureComparisonCache(max_structures=max(1, 2 * len(values)))
         classes = (_cluster_cover if method == "cover" else _cluster_leader)(
@@ -303,23 +324,23 @@ def _cluster_group(
             grid_strategy=grid_strategy,
         )
         records = tuple(
-            _distinct_record(kind, wyckoff_content_id, member_cids[index], member_count, values[index])
+            _distinct_record(kind, bare_content_id, member_cids[index], member_count, values[index])
             for index, member_count in classes
         )
-        return _GroupResult(kind, wyckoff_content_id, records, None, method)
+        return _GroupResult(kind, bare_content_id, records, None, method, bare)
     except Exception as error:  # noqa: BLE001 - one bad group is logged and skipped, not fatal
-        return _GroupResult(kind, wyckoff_content_id, (), str(error), None)
+        return _GroupResult(kind, bare_content_id, (), str(error), None)
 
 
 def _distinct_record(
-    kind: str, wyckoff_content_id: str, structure_content_id: str, member_count: int, value: Any
+    kind: str, bare_content_id: str, structure_content_id: str, member_count: int, value: Any
 ) -> DistinctPrototypeRecord | DistinctProtostructureRecord:
     if kind == _KIND_PROTOSTRUCTURE:
         return DistinctProtostructureRecord(
-            wyckoff_content_id, structure_content_id, member_count, _protostructure_record_from_value(value)
+            bare_content_id, structure_content_id, member_count, _protostructure_record_from_value(value)
         )
     return DistinctPrototypeRecord(
-        wyckoff_content_id, structure_content_id, member_count, _prototype_record_from_value(value)
+        bare_content_id, structure_content_id, member_count, _prototype_record_from_value(value)
     )
 
 
@@ -338,8 +359,8 @@ def _group_members(store: SqlStore) -> tuple[dict[str, set[str]], dict[str, set[
     searcher = store.searcher()
     variable = searcher.variable(CanonicalizationRecord)
     searcher.add(variable.error == None)
-    searcher.output(variable.prototype_content_id, "prototype_content_id")
-    searcher.output(variable.protostructure_content_id, "protostructure_content_id")
+    searcher.output(variable.bare_prototype_content_id, "bare_prototype_content_id")
+    searcher.output(variable.bare_protostructure_content_id, "bare_protostructure_content_id")
     searcher.output(variable.canonical_content_id, "canonical_content_id")
     for (prototype_cid, protostructure_cid, canonical_cid), _names in searcher:
         prototype_groups.setdefault(prototype_cid, set()).add(canonical_cid)
@@ -352,14 +373,14 @@ def _completed_groups(store: SqlStore, record_type: type) -> set[str]:
     done: set[str] = set()
     searcher = store.searcher()
     variable = searcher.variable(record_type)
-    searcher.output(variable.wyckoff_content_id, "wyckoff_content_id")
-    for (wyckoff_content_id,), _names in searcher:
-        done.add(wyckoff_content_id)
+    searcher.output(variable.bare_content_id, "bare_content_id")
+    for (bare_content_id,), _names in searcher:
+        done.add(bare_content_id)
     return done
 
 
 def _pending_groups(source_store: SqlStore, output_store: SqlStore) -> list[tuple[str, str, set[str]]]:
-    """List ``(kind, wyckoff_content_id, member_cids)`` for groups still needing clustering.
+    """List ``(kind, bare_content_id, member_cids)`` for groups still needing clustering.
 
     Preserve source discovery order within each catalog, without prioritizing group size.
     """
@@ -370,9 +391,9 @@ def _pending_groups(source_store: SqlStore, output_store: SqlStore) -> list[tupl
         (_KIND_PROTOSTRUCTURE, protostructure_groups, DistinctProtostructureRecord),
     ):
         done = _completed_groups(output_store, record_type)
-        for wyckoff_content_id, member_cids in groups.items():
-            if wyckoff_content_id not in done:
-                work.append((kind, wyckoff_content_id, member_cids))
+        for bare_content_id, member_cids in groups.items():
+            if bare_content_id not in done:
+                work.append((kind, bare_content_id, member_cids))
     return work
 
 
@@ -391,8 +412,8 @@ def _tagged_inputs(
     hands out content-id tuples and the fetch I/O parallelizes across the pool. Sorting the ids
     fixes a deterministic representative order.
     """
-    for kind, wyckoff_content_id, member_cids in work:
-        base = (kind, wyckoff_content_id, tuple(sorted(member_cids)), delta, max_coverage_size)
+    for kind, bare_content_id, member_cids in work:
+        base = (kind, bare_content_id, tuple(sorted(member_cids)), delta, max_coverage_size)
         if grid_dimensions:
             yield None, (*base, grid_dimensions, grid_strategy)
         else:
@@ -426,7 +447,7 @@ def _bounded_results[TagT, InputT, ResultT](
 
 
 def _save_records(bulk: Any, batch: list[_GroupResult]) -> int:
-    """Append every non-error result's distinct records into an open bulk-ingest; return the count.
+    """Append successful bare parents and distinct results; return the refined result count.
 
     ``bulk_ingest`` buffers encoded rows and appends them with ``executemany``, ~17x faster than
     per-record ``save`` for these coordinate-carrying records on DuckDB (whose slow path is
@@ -437,6 +458,11 @@ def _save_records(bulk: Any, batch: list[_GroupResult]) -> int:
     for result in batch:
         if result.error is not None:
             continue
+        if not result.records:
+            continue
+        if result.bare is None or content_id(result.bare) != result.bare_content_id:
+            raise ValueError("successful group requires a matching bare parent")
+        bulk.save(result.bare)
         for record in result.records:
             bulk.save(record)
             written += 1
@@ -633,8 +659,14 @@ def main(argv: list[str] | None = None) -> int:
         )
         if args.stats:
             distinct_prototypes, distinct_protostructures = _catalog_counts(output_store)
+            bare_counts = []
+            for record_type in (BarePrototypeRecord, BareProtostructureRecord):
+                query = output_store.searcher()
+                query.variable(record_type)
+                bare_counts.append(query.count())
             print(
-                f"Distinct prototypes: {distinct_prototypes}; distinct protostructures: {distinct_protostructures}",
+                f"Bare prototypes: {bare_counts[0]}; bare protostructures: {bare_counts[1]}; "
+                f"distinct prototypes: {distinct_prototypes}; distinct protostructures: {distinct_protostructures}",
                 flush=True,
             )
     return 0

@@ -160,7 +160,7 @@ def test_two_pass_import_and_canonicalization(tmp_path: Path, fmt: str) -> None:
     pytest.importorskip("spglib")
     if fmt == "duckdb":
         pytest.importorskip("duckdb_engine")
-    from httk.atomistic import ProtostructureRecord, PrototypeRecord
+    from httk.atomistic import BareProtostructureRecord, BarePrototypeRecord
 
     from build_cod.records import StructureImportRecord
 
@@ -203,17 +203,23 @@ def test_two_pass_import_and_canonicalization(tmp_path: Path, fmt: str) -> None:
         assert all_protos == 2
         assert high_symmetry == 2  # both canonicalize to spacegroup IT number > 2
         assert all_templates == 2
-        assert _count(store, ProtostructureRecord) == 2
-        assert _count(store, ProtostructureRecord, lambda v: v.spacegroup_it_number > 2) == 2
-        assert _count(store, PrototypeRecord) == 2
+        assert _count(store, BareProtostructureRecord) == 2
+        assert _count(store, BareProtostructureRecord, lambda v: v.spacegroup_it_number > 2) == 2
+        assert _count(store, BarePrototypeRecord) == 2
 
         # The two duplicate files share one protostructure and one canonical/run.
         by_source = {Path(row.source).name: row for row in rows}
-        assert by_source["nacl_a.cif"].protostructure_content_id == by_source["nacl_dup.cif"].protostructure_content_id
-        assert by_source["nacl_a.cif"].prototype_content_id == by_source["nacl_dup.cif"].prototype_content_id
-        assert all(row.protostructure_content_id and row.prototype_content_id for row in rows)
+        assert (
+            by_source["nacl_a.cif"].bare_protostructure_content_id
+            == by_source["nacl_dup.cif"].bare_protostructure_content_id
+        )
+        assert by_source["nacl_a.cif"].bare_prototype_content_id == by_source["nacl_dup.cif"].bare_prototype_content_id
+        assert all(row.bare_protostructure_content_id and row.bare_prototype_content_id for row in rows)
         assert by_source["nacl_a.cif"].run_content_id == by_source["nacl_dup.cif"].run_content_id
-        assert by_source["autoc.cif"].protostructure_content_id != by_source["nacl_a.cif"].protostructure_content_id
+        assert (
+            by_source["autoc.cif"].bare_protostructure_content_id
+            != by_source["nacl_a.cif"].bare_protostructure_content_id
+        )
 
     # Provenance: the Run edges join original -> canonical (verified via raw SQL on SQLite).
     if fmt == "sqlite":
@@ -252,7 +258,7 @@ def test_resume_is_duplicate_free_and_complete(tmp_path: Path, fmt: str) -> None
     pytest.importorskip("spglib")
     if fmt == "duckdb":
         pytest.importorskip("duckdb_engine")
-    from httk.atomistic import ProtostructureRecord
+    from httk.atomistic import BareProtostructureRecord
 
     cod = _fixture(tmp_path)
     source = tmp_path / f"cod.{fmt}"
@@ -272,7 +278,7 @@ def test_resume_is_duplicate_free_and_complete(tmp_path: Path, fmt: str) -> None
         rows = _canonicalization_rows(store)
         assert len(rows) == 3
         assert len({row.source for row in rows}) == 3  # no duplicate sources
-        assert _count(store, ProtostructureRecord) == 2
+        assert _count(store, BareProtostructureRecord) == 2
 
     # A third full run has nothing left to do and adds nothing.
     assert canon_main([str(source), "--output", str(canonical), "--format", fmt, "--workers", "2"]) == 0
@@ -286,7 +292,7 @@ def test_worker_records_a_canonicalization_error(tmp_path: Path) -> None:
     # and the writer stores exactly one error CanonicalizationRecord (no derived refs).
     result = _canonicalize_one(("some.cif", object(), "original-cid", None, False, 64))
     assert result.error is not None
-    assert result.canonical is None and result.protostructure_record is None
+    assert result.canonical is None and result.bare_protostructure_record is None
 
     from httk.store import Backend, SqlStore
 
@@ -325,7 +331,7 @@ def test_worker_canonicalizes_once_then_normalizes_chirality_for_derivation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     pytest.importorskip("spglib")
-    from httk.atomistic import ProtostructureView, PrototypeView
+    from httk.atomistic import BareProtostructureView, BarePrototypeView
     from httk.atomistic.symmetry import canonical as atomistic_canonical_module
     from httk.core.storage import content_id
 
@@ -367,8 +373,8 @@ def test_worker_canonicalizes_once_then_normalizes_chirality_for_derivation(
 
         proto_view_inputs = []
         prototype_view_inputs = []
-        real_proto_view = ProtostructureView
-        real_prototype_view = PrototypeView
+        real_proto_view = BareProtostructureView
+        real_prototype_view = BarePrototypeView
 
         def spy_proto_view(obj, **kwargs):
             proto_view_inputs.append(obj)
@@ -381,8 +387,8 @@ def test_worker_canonicalizes_once_then_normalizes_chirality_for_derivation(
         monkeypatch.setattr(canonicalize_module, "canonical_asu", spy_canonical_asu)
         monkeypatch.setattr(canonicalize_module, "normalize_chirality", spy_normalize_chirality)
         monkeypatch.setattr(atomistic_canonical_module, "canonical_asu", reject_recanonicalization)
-        monkeypatch.setattr(canonicalize_module, "ProtostructureView", spy_proto_view)
-        monkeypatch.setattr(canonicalize_module, "PrototypeView", spy_prototype_view)
+        monkeypatch.setattr(canonicalize_module, "BareProtostructureView", spy_proto_view)
+        monkeypatch.setattr(canonicalize_module, "BarePrototypeView", spy_prototype_view)
 
         result = _canonicalize_one((source, imported.structure, imported.structure.id, 0.01, False, 64))
 
@@ -397,12 +403,12 @@ def test_worker_canonicalizes_once_then_normalizes_chirality_for_derivation(
     assert proto_view_inputs == [prototype_canonical]
     assert prototype_view_inputs == [prototype_canonical]
     assert result.canonical_content_id == content_id(canonical)
-    assert result.protostructure_content_id == content_id(result.protostructure_record)
-    assert result.prototype_content_id == content_id(result.prototype_record)
-    assert result.protostructure_record.representative is None
-    assert result.protostructure_record.discriminator is None
-    assert result.prototype_record.representative is None
-    assert result.prototype_record.discriminator is None
+    assert result.bare_protostructure_content_id == content_id(result.bare_protostructure_record)
+    assert result.bare_prototype_content_id == content_id(result.bare_prototype_record)
+    assert not hasattr(result.bare_protostructure_record, "representative")
+    assert not hasattr(result.bare_protostructure_record, "discriminator")
+    assert not hasattr(result.bare_prototype_record, "representative")
+    assert not hasattr(result.bare_prototype_record, "discriminator")
 
 
 def test_bounded_results_keeps_input_consumption_within_the_window() -> None:

@@ -3,8 +3,8 @@
 Pass 1 (``build_cod.cli``) imports every COD CIF into a source database. This pass reads
 each import that holds a structure and has no ``cod_canonicalization`` row in a separate
 destination database yet (that cross-database anti-join is the resume mechanism),
-canonicalizes it with :func:`~httk.atomistic.canonical_asu`, derives its ``Protostructure``
-and ``Prototype``, and records only the canonical structure, the two derived values, a
+canonicalizes it with :func:`~httk.atomistic.canonical_asu`, derives its ``BareProtostructure``
+and ``BarePrototype``, and records only the canonical structure, the two derived values, a
 provenance :class:`~httk.core.provenance.Run`, and one
 :class:`~build_cod.records.CanonicalizationRecord` linking them back to the source import.
 
@@ -25,18 +25,16 @@ from typing import Any
 from httk.atomistic import (
     ASUStructure,
     ASUStructureView,
-    Protostructure,
-    ProtostructureView,
-    Prototype,
-    PrototypeView,
+    BareProtostructureView,
+    BarePrototypeView,
     canonical_asu,
     normalize_chirality,
 )
 from httk.atomistic.storage.records import (
-    ProtostructureRecord,
-    PrototypeRecord,
-    _protostructure_record_from_value,
-    _prototype_record_from_value,
+    BareProtostructureRecord,
+    BarePrototypeRecord,
+    _bare_protostructure_record_from_value,
+    _bare_prototype_record_from_value,
 )
 from httk.core.provenance import Run, RunEdge
 from httk.core.storage import content_id
@@ -64,10 +62,10 @@ class _Result:
     error: str | None
     canonical: ASUStructure | None
     canonical_content_id: str | None
-    prototype_record: PrototypeRecord | None
-    prototype_content_id: str | None
-    protostructure_record: ProtostructureRecord | None
-    protostructure_content_id: str | None
+    bare_prototype_record: BarePrototypeRecord | None
+    bare_prototype_content_id: str | None
+    bare_protostructure_record: BareProtostructureRecord | None
+    bare_protostructure_content_id: str | None
     lift: bool
 
 
@@ -83,22 +81,20 @@ def _canonicalize_one(item: tuple[str, Any, str, float | None, bool, int]) -> _R
             )
         canonical = canonical_asu(structure, tolerance=tolerance, lift=lift, preserve_chirality=True)
         prototype_canonical = normalize_chirality(canonical)
-        recognized_protostructure = ProtostructureView(prototype_canonical).unview()
-        protostructure = Protostructure(recognized_protostructure.spacegroup, recognized_protostructure.occupations)
-        recognized_prototype = PrototypeView(prototype_canonical).unview()
-        prototype = Prototype(recognized_prototype.spacegroup, recognized_prototype.occupations)
-        protostructure_record = _protostructure_record_from_value(protostructure)
-        prototype_record = _prototype_record_from_value(prototype)
+        protostructure = BareProtostructureView(prototype_canonical).unview()
+        prototype = BarePrototypeView(prototype_canonical).unview()
+        bare_protostructure_record = _bare_protostructure_record_from_value(protostructure)
+        bare_prototype_record = _bare_prototype_record_from_value(prototype)
         return _Result(
             source,
             original_cid,
             None,
             canonical,
             content_id(canonical),
-            prototype_record,
-            content_id(prototype_record),
-            protostructure_record,
-            content_id(protostructure_record),
+            bare_prototype_record,
+            content_id(bare_prototype_record),
+            bare_protostructure_record,
+            content_id(bare_protostructure_record),
             lift,
         )
     except Exception as error:  # noqa: BLE001 - one bad structure becomes an error row, not an aborted pass
@@ -207,8 +203,8 @@ def _write_result(store: SqlStore, result: _Result) -> CanonicalizationRecord:
             result.source, result.original_content_id, None, None, None, None, result.error, result.lift
         )
     store.save(result.canonical)
-    store.save(result.prototype_record)
-    store.save(result.protostructure_record)
+    store.save(result.bare_prototype_record)
+    store.save(result.bare_protostructure_record)
     run = Run(
         workflow_declaration_uri=WORKFLOW_URI,
         inputs=(RunEdge("input", "structures", result.original_content_id),),
@@ -219,8 +215,8 @@ def _write_result(store: SqlStore, result: _Result) -> CanonicalizationRecord:
         result.source,
         result.original_content_id,
         result.canonical_content_id,
-        result.prototype_content_id,
-        result.protostructure_content_id,
+        result.bare_prototype_content_id,
+        result.bare_protostructure_content_id,
         content_id(run),
         None,
         result.lift,
@@ -251,13 +247,13 @@ def _write_batch(store: SqlStore, batch: list[tuple[int | None, _Result]]) -> tu
 def _catalog_counts(store: SqlStore) -> tuple[int, int, int]:
     """Return protostructure totals, high-symmetry totals, and prototype count."""
     total = store.searcher()
-    total.variable(ProtostructureRecord)
+    total.variable(BareProtostructureRecord)
     all_count = total.count()
     filtered = store.searcher()
-    variable = filtered.variable(ProtostructureRecord)
+    variable = filtered.variable(BareProtostructureRecord)
     filtered.add(variable.spacegroup_it_number > 2)
     prototypes = store.searcher()
-    prototypes.variable(PrototypeRecord)
+    prototypes.variable(BarePrototypeRecord)
     return all_count, filtered.count(), prototypes.count()
 
 
@@ -380,8 +376,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.stats:
             all_count, high_symmetry, prototype_count = _catalog_counts(output_store)
             print(
-                f"Protostructures: {all_count} total; {high_symmetry} with spacegroup IT number > 2; "
-                f"Prototypes: {prototype_count} total",
+                f"BareProtostructures: {all_count} total; {high_symmetry} with spacegroup IT number > 2; "
+                f"BarePrototypes: {prototype_count} total",
                 flush=True,
             )
     return 0

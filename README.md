@@ -19,16 +19,17 @@ The build is three passes with separate databases:
 2. **Canonicalize** (`build-cod-canonicalize`) reads the import database, excludes the four
    molecular-chemistry journals, canonicalizes each remaining structure with at most 64
    asymmetric-unit sites by default, and writes a second database containing only canonical
-   structures, their `Protostructure` and `Prototype` catalogs, provenance `Run` records,
+   structures, their `BareProtostructure` and `BarePrototype` catalogs, provenance `Run` records,
    and `cod_canonicalization` rows linking them back to the source imports by path and
    content ID.
 3. **Distinct** (`build-cod-distinct`) reads the canonical database, groups every canonical
-   structure by its Wyckoff-only `Prototype` and by its `Protostructure`, and clusters each
+   structure by its `BarePrototype` and by its `BareProtostructure`, and clusters each
    group by geometry so that the kept representatives are pairwise dissimilar (each pair's
    `similar` call returns `False`) and every member is within `--delta` of one. It writes a
    third database of `cod_distinct_prototype` / `cod_distinct_protostructure` rows, each
    holding the Wyckoff group key, a representative carrying real coordinates, the source
    structure chosen as representative, and how many distinct members collapsed onto it.
+   Bare parents are stored separately from refined `Prototype` and `Protostructure` records.
 
 `make build` creates or resumes `IMPORT_OUTPUT` (default `database/cod.duckdb`).
 `make canonicalize` independently reads that file and creates or resumes
@@ -113,7 +114,7 @@ build-cod-distinct database/cod-canonical.duckdb --max-coverage-size 1    # forc
 build-cod-distinct database/cod-canonical.duckdb --grid-dimensions 2 --grid-strategy variance
 ```
 
-The Wyckoff-only pass-2 `Prototype`/`Protostructure` carry no coordinates, so *within* one
+The pass-2 `BarePrototype`/`BareProtostructure` carry no coordinates, so *within* one
 Wyckoff group the geometry must come from the member structures. Pass 3 rebuilds each member as
 a representative-carrying value (`Protostructure(representative=normalize_chirality(canonical))`,
 erased to a `Prototype` for the prototype catalog) and clusters the group so the kept
@@ -159,16 +160,17 @@ The default uses two coordinates selected by variance (`--grid-dimensions 2 --gr
 Use `--grid-dimensions 0` to disable the grid.
 The grid is built per group and released with that group's comparison cache.
 
-Resume is the cross-database anti-join of pass 2: a Wyckoff group already present in the distinct
-database is skipped. Because the whole run is one `bulk_ingest`, its rows become durable when the
-run finishes — an interrupted run leaves the distinct database unchanged and re-clusters from the
-last *completed* run (append a later batch of new canonicalizations and only the new groups are
-processed). This is the offline-build tradeoff for the batched-write speed.
+Resume uses a cross-database anti-join: a bare group with completed distinct-result rows is
+skipped. Each successful group stores its bare parent and all refined results within the same
+bulk-ingest transaction. The worker verifies that every member projects to the group's bare
+content ID before returning results. A bare parent alone does not mark a group complete.
+The whole pass commits in one bulk-ingest transaction. An interruption leaves previously
+completed runs intact; failed groups remain pending for a later run.
 
 ## The headline queries
 
-"How many protostructures are in COD" is the row count of `atomistic_protostructure`, and
-"how many prototypes" is the row count of `atomistic_prototype`;
+"How many bare protostructures are in COD" is the row count of `atomistic_bare_protostructure`, and
+"how many bare prototypes" is the row count of `atomistic_bare_prototype`;
 "with spacegroup IT number > 2" is the indexed filter on it. Both structure versions and
 the which-yielded-which linkage remain queryable across the two databases.
 
@@ -176,16 +178,16 @@ With the searcher API (identical on DuckDB and SQLite):
 
 ```python
 from httk.store import Backend, SqlStore
-from httk.atomistic import PrototypeRecord, ProtostructureRecord
+from httk.atomistic import BarePrototypeRecord, BareProtostructureRecord
 from build_cod.layout import entry_records
 
 with Backend.duckdb("database/cod-canonical.duckdb") as backend:
     store = SqlStore(backend, entry_records=entry_records())
-    total = store.searcher(); total.variable(ProtostructureRecord)
-    print("protostructures:", total.count())
-    prototypes = store.searcher(); prototypes.variable(PrototypeRecord)
-    print("prototypes:", prototypes.count())
-    high = store.searcher(); v = high.variable(ProtostructureRecord)
+    total = store.searcher(); total.variable(BareProtostructureRecord)
+    print("bare protostructures:", total.count())
+    prototypes = store.searcher(); prototypes.variable(BarePrototypeRecord)
+    print("bare prototypes:", prototypes.count())
+    high = store.searcher(); v = high.variable(BareProtostructureRecord)
     high.add(v.spacegroup_it_number > 2)
     print("with IT number > 2:", high.count())
 ```
@@ -194,9 +196,9 @@ As SQL (the same table and column names on both engines). The protostructure tab
 content-id deduplicated and never accumulates superseded rows, so a plain count is exact:
 
 ```sql
-SELECT COUNT(*) FROM atomistic_protostructure;
-SELECT COUNT(*) FROM atomistic_protostructure WHERE spacegroup_it_number > 2;
-SELECT COUNT(*) FROM atomistic_prototype;
+SELECT COUNT(*) FROM atomistic_bare_protostructure;
+SELECT COUNT(*) FROM atomistic_bare_protostructure WHERE spacegroup_it_number > 2;
+SELECT COUNT(*) FROM atomistic_bare_prototype;
 ```
 
 **Counting canonicalized imports (retry-proof).** `--retry-errors` supersedes an error row
@@ -213,8 +215,8 @@ structure's content ID are linked by each destination `cod_canonicalization` row
 `WHERE error IS NULL` keeps this to current-state rows):
 
 ```sql
-SELECT source, original_content_id, canonical_content_id, protostructure_content_id,
-       prototype_content_id
+SELECT source, original_content_id, canonical_content_id, bare_protostructure_content_id,
+       bare_prototype_content_id
 FROM cod_canonicalization
 WHERE error IS NULL;
 ```
@@ -241,7 +243,7 @@ would cross-product them, and would need a per-label correlated subquery instead
 The store's entry declaration is stamped into each database on first open and byte-checked
 on reopen, so the import and canonical databases use the same declaration
 (`build_cod.layout.entry_records`). Only the OPTIMADE `structures` family is declared; the
-catalog tables (`atomistic_protostructure`, `atomistic_prototype`, `core_run`,
+catalog tables (`atomistic_bare_protostructure`, `atomistic_bare_prototype`, `core_run`,
 `cod_canonicalization`) are stored as on-demand internal tables, just like the import database's
 `cod_structure_import`. They are deliberately kept out of the entry declaration: declaring
 them would make the OPTIMADE server try to serve families that have no served definition
@@ -252,7 +254,17 @@ original structure held only in the source database.
 The distinct database stores no structures of its own, so it declares no entry family
 (`entry_records={}`); its `cod_distinct_prototype` / `cod_distinct_protostructure` rows are
 on-demand tables that nest a representative `Prototype`/`Protostructure` record (coordinates
-included), and reference the source canonical structure by content ID only.
+included), and reference the source canonical structure by content ID only. It also persists
+`BarePrototypeRecord` and `BareProtostructureRecord` parents. The four tables
+`atomistic_bare_prototype`, `atomistic_bare_protostructure`, `atomistic_prototype`, and
+`atomistic_protostructure` are independently queryable. Count bare tables for broad Wyckoff
+classes and refined tables for geometrical classes. Query `DistinctPrototypeRecord` or
+`DistinctProtostructureRecord` for each refined representative's `bare_content_id`, source
+structure, and member count; match that ID to `content_id(bare_record)` from the corresponding
+bare table. Labels are descriptive and nonunique; join by content identity.
+
+This schema requires fresh canonical and distinct databases. No migration or stored-ID rewrite
+is performed. The import database and structures-only serving declaration are unchanged.
 
 ## DuckDB caveats
 

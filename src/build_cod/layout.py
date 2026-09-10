@@ -2,11 +2,11 @@
 
 The declaration is stamped into each database on first open and byte-checked on reopen,
 so pass 1 (import) and pass 2 (canonicalization) construct exactly the same
-``SqlStore(entry_records=...)`` even though only pass 2 writes prototypes, protostructures
+``SqlStore(entry_records=...)`` even though only pass 2 writes bare prototypes, bare protostructures
 and runs.
 
 Only the OPTIMADE ``structures`` family is declared. The pass-2 records
-(``atomistic_protostructure``, ``atomistic_prototype``, ``core_run`` and
+(``atomistic_bare_protostructure``, ``atomistic_bare_prototype``, ``core_run`` and
 ``cod_canonicalization``) are stored as on-demand internal tables, exactly like the
 pass-1 ``cod_structure_import`` table: they need no entry declaration to be saved or
 queried. Keeping them out of the entry declaration is deliberate -- adding them would make

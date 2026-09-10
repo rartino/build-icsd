@@ -47,6 +47,8 @@ def test_cluster_group_uses_grid_as_conservative_filter(monkeypatch) -> None:
     monkeypatch.setattr(distinct, "_comparison_grid", _make_grid)
     monkeypatch.setattr(distinct, "_fetch_members", lambda cids: [(cid, cid) for cid in cids])
     monkeypatch.setattr(distinct, "_build_value", lambda kind, record: values[int(record)])
+    monkeypatch.setattr(distinct, "_bare_record", lambda kind, value: "wyckoff")
+    monkeypatch.setattr(distinct, "content_id", lambda value: value)
     monkeypatch.setattr(distinct, "_distinct_record", lambda kind, group, cid, count, value: (cid, count))
 
     result = distinct._cluster_group(("prototype", "wyckoff", ("0", "1", "2"), 0.25, 1, 2, "variance"))
@@ -63,6 +65,8 @@ def test_cluster_group_accepts_legacy_five_item_work_item(monkeypatch) -> None:
     value = _Value(0, [])
     monkeypatch.setattr(distinct, "_fetch_members", lambda cids: [("cid", object())])
     monkeypatch.setattr(distinct, "_build_value", lambda kind, record: value)
+    monkeypatch.setattr(distinct, "_bare_record", lambda kind, value: "wyckoff")
+    monkeypatch.setattr(distinct, "content_id", lambda value: value)
     monkeypatch.setattr(distinct, "_distinct_record", lambda *args: args)
 
     result = distinct._cluster_group(("prototype", "wyckoff", ("cid",), 0.25, 1))

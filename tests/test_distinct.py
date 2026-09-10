@@ -4,11 +4,13 @@ from fractions import Fraction
 from pathlib import Path
 
 import pytest
+from httk.core.storage import content_id
 
 from build_cod import distinct
 from build_cod.distinct import (
     DistinctProtostructureRecord,
     DistinctPrototypeRecord,
+    _bare_record,
     _build_value,
     _catalog_counts,
     _cluster_cover,
@@ -86,14 +88,15 @@ def test_cluster_group_fetches_and_builds_records(kind: str, monkeypatch) -> Non
     members = [("cid-small", _rocksalt("5.64")), ("cid-dup", _rocksalt("5.64")), ("cid-big", _rocksalt("8.0"))]
     _stub_fetch(monkeypatch, members)
 
-    cover = _cluster_group((kind, "wyckoff-cid", ("cid-small", "cid-dup", "cid-big"), 0.0, 1000))
+    bare_cid = content_id(_bare_record(kind, _build_value(kind, members[0][1])))
+    cover = _cluster_group((kind, bare_cid, ("cid-small", "cid-dup", "cid-big"), 0.0, 1000))
     assert cover.error is None and cover.method == "cover"
     assert sorted(r.member_count for r in cover.records) == [1, 2]
-    assert all(r.wyckoff_content_id == "wyckoff-cid" for r in cover.records)
+    assert all(r.bare_content_id == bare_cid for r in cover.records)
     assert {r.structure_content_id for r in cover.records} == {"cid-small", "cid-big"}
     assert all(r.representative.representative is not None for r in cover.records)
 
-    leader = _cluster_group((kind, "wyckoff-cid", ("cid-small", "cid-dup", "cid-big"), 0.0, 1))
+    leader = _cluster_group((kind, bare_cid, ("cid-small", "cid-dup", "cid-big"), 0.0, 1))
     assert leader.method == "leader"
     assert sorted(r.member_count for r in leader.records) == [1, 2]
 
@@ -124,8 +127,9 @@ def test_distinct_records_persist_representative_coordinates(tmp_path: Path) -> 
     from httk.store import Backend, SqlStore
 
     value = _build_value("prototype", _rocksalt("5.64"))
-    record = _distinct_record("prototype", "wyckoff-cid", "cid-small", 1, value)
-    result = distinct._GroupResult("prototype", "wyckoff-cid", (record,), None, "cover")
+    bare = _bare_record("prototype", value)
+    record = _distinct_record("prototype", content_id(bare), "cid-small", 1, value)
+    result = distinct._GroupResult("prototype", content_id(bare), (record,), None, "cover", bare)
 
     database = tmp_path / "cod-distinct.sqlite"
     with Backend.sqlite(database) as backend:
@@ -149,8 +153,9 @@ def test_save_records_appends_across_ingests_and_skips_errors(tmp_path: Path) ->
 
     def _result(cid: str) -> object:
         value = _build_value("prototype", _rocksalt(cid))
-        record = _distinct_record("prototype", f"wyk-{cid}", cid, 1, value)
-        return distinct._GroupResult("prototype", f"wyk-{cid}", (record,), None, "cover")
+        bare = _bare_record("prototype", value)
+        record = _distinct_record("prototype", content_id(bare), cid, 1, value)
+        return distinct._GroupResult("prototype", content_id(bare), (record,), None, "cover", bare)
 
     error = distinct._GroupResult("prototype", "wyk-bad", (), "boom", None)
 
@@ -174,11 +179,14 @@ def test_distinct_record_validation_rejects_bad_fields() -> None:
     with pytest.raises(ValueError):
         DistinctProtostructureRecord("", good.structure_content_id, 1, good.representative)
     with pytest.raises(ValueError):
-        DistinctProtostructureRecord(good.wyckoff_content_id, good.structure_content_id, 0, good.representative)
+        DistinctProtostructureRecord(good.bare_content_id, good.structure_content_id, 0, good.representative)
 
 
-def test_end_to_end_distinct_over_two_passes(tmp_path: Path) -> None:
+@pytest.mark.parametrize("engine", ["sqlite", "duckdb"])
+def test_end_to_end_distinct_over_two_passes(tmp_path: Path, engine: str) -> None:
     pytest.importorskip("spglib")
+    pytest.importorskip(engine if engine == "duckdb" else "sqlite3")
+    from httk.atomistic import BareProtostructureRecord, BarePrototypeRecord, ProtostructureRecord, PrototypeRecord
     from httk.store import Backend, SqlStore
 
     from build_cod.canonicalize import main as canon_main
@@ -219,29 +227,93 @@ Cl4 Cl 0.0 0.0 0.5
     (cif / "nacl_dup.cif").write_text(nacl.format(a="5.64"), encoding="utf-8")
     (cif / "nacl_big.cif").write_text(nacl.format(a="8.0"), encoding="utf-8")
 
-    source = tmp_path / "cod.sqlite"
-    canonical = tmp_path / "cod-canonical.sqlite"
-    distinct_db = tmp_path / "cod-distinct.sqlite"
-    assert build_main([str(tmp_path / "COD"), "--format", "sqlite", "--output", str(source)]) == 0
-    assert canon_main([str(source), "--output", str(canonical), "--format", "sqlite"]) == 0
+    source = tmp_path / f"cod.{engine}"
+    canonical = tmp_path / f"cod-canonical.{engine}"
+    distinct_db = tmp_path / f"cod-distinct.{engine}"
+    assert build_main([str(tmp_path / "COD"), "--format", engine, "--output", str(source)]) == 0
+    assert canon_main([str(source), "--output", str(canonical), "--format", engine]) == 0
 
     # This exercises the real per-worker read-only fetch path (the pool initializer opens the
     # source itself). delta 0 keeps the two lattice constants apart: two distinct classes.
-    args = [str(canonical), "--output", str(distinct_db), "--format", "sqlite", "--delta", "0", "--workers", "2"]
+    args = [str(canonical), "--output", str(distinct_db), "--format", engine, "--delta", "0", "--workers", "2"]
     assert distinct_main(args) == 0
-    with Backend.sqlite(distinct_db) as backend:
+    with getattr(Backend, engine)(distinct_db) as backend:
         store = SqlStore(backend, entry_records={})
         assert _catalog_counts(store) == (2, 2)
+        for record_type, count in (
+            (BarePrototypeRecord, 1),
+            (BareProtostructureRecord, 1),
+            (PrototypeRecord, 2),
+            (ProtostructureRecord, 2),
+        ):
+            query = store.searcher()
+            query.variable(record_type)
+            assert query.count() == count
 
         searcher = store.searcher()
         variable = searcher.variable(DistinctPrototypeRecord)
         searcher.output(variable, "record")
         rows = [values[0] for values, _names in searcher]
-        assert len({row.wyckoff_content_id for row in rows}) == 1  # one Wyckoff prototype
+        assert len({row.bare_content_id for row in rows}) == 1  # one Wyckoff prototype
+        parents = store.searcher()
+        parent = parents.variable(BarePrototypeRecord)
+        parents.output(parent, "parent")
+        assert {row.bare_content_id for row in rows} == {content_id(values[0]) for values, _names in parents}
         assert sorted(row.member_count for row in rows) == [1, 1]  # two distinct crystals
 
     # A re-run is idempotent: the completed groups are skipped, nothing is added.
     assert distinct_main(args) == 0
-    with Backend.sqlite(distinct_db) as backend:
+    with getattr(Backend, engine)(distinct_db) as backend:
         store = SqlStore(backend, entry_records={})
         assert _catalog_counts(store) == (2, 2)
+        for record_type, count in (
+            (BarePrototypeRecord, 1),
+            (BareProtostructureRecord, 1),
+            (PrototypeRecord, 2),
+            (ProtostructureRecord, 2),
+        ):
+            query = store.searcher()
+            query.variable(record_type)
+            assert query.count() == count
+
+
+def test_group_rejects_wrong_bare_identity_and_missing_members(monkeypatch) -> None:
+    _stub_fetch(monkeypatch, [("cid", _rocksalt("5.64"))])
+    result = _cluster_group(("prototype", "wrong-parent", ("cid",), 0.0, 150))
+    assert result.records == () and result.bare is None
+    assert "does not match" in result.error
+    result = _cluster_group(("prototype", "wrong-parent", (), 0.0, 150))
+    assert result.records == () and result.bare is None
+    assert "no available structures" in result.error
+
+
+@pytest.mark.parametrize("engine", ["sqlite", "duckdb"])
+def test_parent_and_results_share_transaction_and_parent_alone_is_pending(tmp_path, engine) -> None:
+    from httk.atomistic import BarePrototypeRecord
+    from httk.store import Backend, SqlStore
+
+    pytest.importorskip(engine if engine == "duckdb" else "sqlite3")
+    value = _build_value("prototype", _rocksalt("5.64"))
+    bare = _bare_record("prototype", value)
+    cid = content_id(bare)
+    result = distinct._GroupResult(
+        "prototype", cid, (_distinct_record("prototype", cid, "source", 1, value),), None, "cover", bare
+    )
+    with getattr(Backend, engine)(tmp_path / f"rollback.{engine}") as backend:
+        store = SqlStore(backend, entry_records={})
+        with (
+            pytest.raises(RuntimeError, match="interrupt"),
+            store.bulk_ingest(finalize="parity", chunk_size=1, track_sids=False) as bulk,
+        ):
+            _save_records(bulk, [result])
+            raise RuntimeError("interrupt")
+        assert distinct._completed_groups(store, DistinctPrototypeRecord) == set()
+        query = store.searcher()
+        query.variable(BarePrototypeRecord)
+        assert query.count() == 0
+        with store.transaction():
+            store.save(bare)
+        assert distinct._completed_groups(store, DistinctPrototypeRecord) == set()
+        with store.bulk_ingest(finalize="parity", chunk_size=1, track_sids=False) as bulk:
+            assert _save_records(bulk, [result]) == 1
+        assert distinct._completed_groups(store, DistinctPrototypeRecord) == {cid}
