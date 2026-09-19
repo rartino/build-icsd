@@ -384,10 +384,16 @@ def _group_members(store: SqlStore) -> tuple[dict[str, set[str]], dict[str, set[
     searcher = store.searcher()
     variable = searcher.variable(CanonicalizationRecord)
     searcher.add(variable.error == None)
-    searcher.output(variable.bare_prototype_content_id, "bare_prototype_content_id")
-    searcher.output(variable.bare_protostructure_content_id, "bare_protostructure_content_id")
-    searcher.output(variable.canonical_content_id, "canonical_content_id")
-    for (prototype_cid, protostructure_cid, canonical_cid), _names in searcher:
+    for row in searcher.results(
+        bare_prototype_content_id=variable.bare_prototype_content_id,
+        bare_protostructure_content_id=variable.bare_protostructure_content_id,
+        canonical_content_id=variable.canonical_content_id,
+    ):
+        prototype_cid, protostructure_cid, canonical_cid = (
+            row.bare_prototype_content_id,
+            row.bare_protostructure_content_id,
+            row.canonical_content_id,
+        )
         prototype_groups.setdefault(prototype_cid, set()).add(canonical_cid)
         protostructure_groups.setdefault(protostructure_cid, set()).add(canonical_cid)
     return prototype_groups, protostructure_groups
@@ -398,9 +404,8 @@ def _completed_groups(store: SqlStore, record_type: type) -> set[str]:
     done: set[str] = set()
     searcher = store.searcher()
     variable = searcher.variable(record_type)
-    searcher.output(variable.bare_content_id, "bare_content_id")
-    for (bare_content_id,), _names in searcher:
-        done.add(bare_content_id)
+    for row in searcher.results(bare_content_id=variable.bare_content_id):
+        done.add(row.bare_content_id)
     return done
 
 

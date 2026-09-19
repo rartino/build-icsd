@@ -115,10 +115,8 @@ def _canonicalization_state(store: SqlStore, retry_errors: bool) -> tuple[set[st
     error_sids: dict[str, int] = {}
     searcher = store.searcher()
     variable = searcher.variable(CanonicalizationRecord)
-    searcher.output(variable.source, "source")
-    searcher.output(variable.sid, "sid")
-    searcher.output(variable.error, "error")
-    for (source, sid, error), _names in searcher:
+    for row in searcher.results(source=variable.source, sid=variable.sid, error=variable.error):
+        source, sid, error = row.source, row.sid, row.error
         done.add(source)
         if error is None:
             succeeded.add(source)
@@ -138,10 +136,8 @@ def _pending_work(
     searcher = source_store.searcher()
     variable = searcher.variable(StructureImportRecord)
     searcher.add(variable.structure != None)
-    searcher.output(variable.source, "source")
-    searcher.output(variable.sid, "sid")
-    searcher.output(variable.journal_name, "journal_name")
-    for (source, sid, journal_name), _names in searcher:
+    for row in searcher.results(source=variable.source, sid=variable.sid, journal_name=variable.journal_name):
+        source, sid, journal_name = row.source, row.sid, row.journal_name
         if _journal_exclusion_for_title(journal_name) is not None:
             continue
         if source not in done:

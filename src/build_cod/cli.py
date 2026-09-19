@@ -76,8 +76,7 @@ def _report_progress(committed: int, prognosis: CompletionPrognosis) -> None:
 def _committed_sources(store: SqlStore) -> set[str]:
     searcher = store.searcher()
     variable = searcher.variable(StructureImportRecord)
-    searcher.output(variable.source, "source")
-    return {source for (source,), _names in searcher}
+    return set(searcher.results(source=variable.source).scalars("source"))
 
 
 def _diagnostic_lines(result: _StructureImportWorkerResult) -> tuple[str, ...]:

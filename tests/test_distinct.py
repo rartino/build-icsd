@@ -140,8 +140,7 @@ def test_distinct_records_persist_representative_coordinates(tmp_path: Path) -> 
 
         searcher = store.searcher()
         variable = searcher.variable(DistinctPrototypeRecord)
-        searcher.output(variable, "record")
-        stored = [values[0] for values, _names in searcher]
+        stored = [row.record for row in searcher.results(record=variable)]
         assert len(stored) == 1
         assert stored[0].representative.representative is not None
         assert content_id(stored[0]) == content_id(record)
@@ -284,13 +283,13 @@ Cl4 Cl 0.0 0.0 0.5
 
         searcher = store.searcher()
         variable = searcher.variable(DistinctPrototypeRecord)
-        searcher.output(variable, "record")
-        rows = [values[0] for values, _names in searcher]
+        rows = [row.record for row in searcher.results(record=variable)]
         assert len({row.bare_content_id for row in rows}) == 1  # one Wyckoff prototype
         parents = store.searcher()
         parent = parents.variable(BarePrototypeRecord)
-        parents.output(parent, "parent")
-        assert {row.bare_content_id for row in rows} == {content_id(values[0]) for values, _names in parents}
+        assert {row.bare_content_id for row in rows} == {
+            content_id(prow.parent) for prow in parents.results(parent=parent)
+        }
         assert sorted(row.member_count for row in rows) == [1, 1]  # two distinct crystals
 
     # A re-run is idempotent: the completed groups are skipped, nothing is added.

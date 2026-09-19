@@ -129,8 +129,7 @@ def _count(store, record_type, predicate=None) -> int:
 def _canonicalization_rows(store) -> list[CanonicalizationRecord]:
     searcher = store.searcher()
     variable = searcher.variable(CanonicalizationRecord)
-    searcher.output(variable, "record")
-    return [values[0] for values, _names in searcher]
+    return [row.record for row in searcher.results(record=variable)]
 
 
 def _table_names(backend) -> set[str]:
@@ -179,9 +178,8 @@ def test_two_pass_import_and_canonicalization(tmp_path: Path, fmt: str) -> None:
         imports = {}
         searcher = store.searcher()
         variable = searcher.variable(StructureImportRecord)
-        searcher.output(variable, "record")
-        for values, _names in searcher:
-            record = values[0]
+        for row in searcher.results(record=variable):
+            record = row.record
             imports[Path(record.source).name] = record
         assert imports["autoc.cif"].autocorrect_attempted
         assert imports["autoc.cif"].autocorrected
@@ -347,9 +345,8 @@ def test_worker_canonicalizes_once_then_normalizes_chirality_for_derivation(
         searcher = store.searcher()
         variable = searcher.variable(StructureImportRecord)
         searcher.add(variable.structure != None)
-        searcher.output(variable.source, "source")
-        searcher.output(variable.sid, "sid")
-        (source, sid), _names = next(iter(searcher))
+        row = next(iter(searcher.results(source=variable.source, sid=variable.sid)))
+        source, sid = row.source, row.sid
         imported = store.fetch(StructureImportRecord, sid, eager=True)
 
         real_canonical_asu = canonicalize_module.canonical_asu
@@ -455,8 +452,7 @@ def test_retry_errors_converges_after_a_successful_retry(tmp_path: Path) -> None
         destination_store = SqlStore(destination_backend, entry_records=entry_records())
         searcher = source_store.searcher()
         variable = searcher.variable(StructureImportRecord)
-        searcher.output(variable.source, "source")
-        ((source,),) = [values for values, _names in searcher]
+        (source,) = list(searcher.results(source=variable.source).scalars("source"))
 
         # Seed a failed canonicalization for the one import, as pass 2 would on an error.
         failure = _Result(source, "orig-cid", "boom", None, None, None, None, None, None, False)
