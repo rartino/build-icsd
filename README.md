@@ -2,13 +2,14 @@
 
 Build a faithful DuckDB or SQLite *httk-store* database from an ICSD CIF tree, derive a
 separate canonical prototype/protostructure catalog, and serve it over OPTIMADE.
-The default input is `../DATA/ICSD/2026.1/cif-experimental`. A release directory
-containing `cif-experimental/` is also accepted. Discovery is recursive, including
+The Make targets select `../DATA/ICSD/2026.1/cif-experimental` for `_expt`
+and `../DATA/ICSD/2026.1/cif-standardized` for `_std`. The import CLI also accepts
+a release directory containing `cif-experimental/`. Discovery is recursive, including
 paths such as `0/00/00/1.cif`; `manifest.csv` is not imported as a structure.
 Existing output files are reopened and resumed; an output is never overwritten.
 
 This repository is adapted from *build-cod*, preserving its three-pass algorithms,
-resource limits, filters, and Makefile target names. ICSD application records use
+resource limits and filters, with separate Make targets for the two CIF variants. ICSD application records use
 `icsd_*` tables, public entries use the `icsd` namespace, and canonicalization runs
 use an ICSD workflow identifier. Start with fresh ICSD databases; copied COD
 databases are not migrated or relabeled.
@@ -17,12 +18,16 @@ Run the passes in order, **after CIF extraction has finished**:
 
 ```sh
 cd build-icsd
-make build
-make canonicalize
-make distinct
+make build_expt
+make canonicalize_expt
+make distinct_expt
+
+make build_std
+make canonicalize_std
+make distinct_std
 ```
 
-Do not run these three targets concurrently. The extractor writes directly to
+Do not run passes for the same variant concurrently. The extractor writes directly to
 final filenames; importing during extraction could persist an incomplete-file
 error that resume would skip. Finish import before canonicalization, and finish
 canonicalization before distinct. If the canonical source gains members after
@@ -55,11 +60,16 @@ The build is three passes with separate databases:
    structure chosen as representative, and how many distinct members collapsed onto it.
    Bare parents are stored separately from refined `Prototype` and `Protostructure` records.
 
-`make build` creates or resumes `IMPORT_OUTPUT` (default `database/icsd.duckdb`).
-`make canonicalize` independently reads that file and creates or resumes
-`CANONICAL_OUTPUT` (default `database/icsd-canonical.duckdb`).
-`make distinct` reads the canonical database and creates or resumes
-`DISTINCT_OUTPUT` (default `database/icsd-distinct.duckdb`).
+`make build_expt` creates or resumes `IMPORT_OUTPUT` (default `database/icsd-expt.duckdb`).
+`make canonicalize_expt` independently reads that file and creates or resumes
+`CANONICAL_OUTPUT` (default `database/icsd-expt-canonical.duckdb`).
+`make distinct_expt` reads the canonical database and creates or resumes
+`DISTINCT_OUTPUT` (default `database/icsd-expt-distinct.duckdb`).
+The `_std` targets use the corresponding `icsd-std.duckdb`,
+`icsd-std-canonical.duckdb`, and `icsd-std-distinct.duckdb` files.
+`FORMAT=sqlite` changes all three suffixes to `.sqlite`.
+Explicit `ICSD_PATH` and output overrides still work; use separate output files
+for the two variants.
 
 The Makefile automatically uses `../.venv/bin/python` when present, or `python3`
 otherwise. Override `PYTHON` to select another environment with the required
@@ -87,13 +97,13 @@ DuckDB is the default format; SQLite remains available with `--format sqlite`. U
 `ICSD_PATH` when the positional path is omitted:
 
 ```sh
-build-icsd /path/to/DATA/ICSD/2026.1/cif-experimental --output database/icsd.duckdb
-build-icsd /path/to/DATA/ICSD/2026.1/cif-experimental --format sqlite --output database/icsd.sqlite
-ICSD_PATH=/path/to/DATA/ICSD/2026.1/cif-experimental build-icsd --workers 4 --progress-every 1000
+build-icsd /path/to/DATA/ICSD/2026.1/cif-experimental --output database/icsd-expt.duckdb
+build-icsd /path/to/DATA/ICSD/2026.1/cif-experimental --format sqlite --output database/icsd-expt.sqlite
+ICSD_PATH=/path/to/DATA/ICSD/2026.1/cif-experimental build-icsd --output database/icsd-expt.duckdb --workers 4 --progress-every 1000
 # Resume with bounded commits:
-build-icsd /path/to/DATA/ICSD/2026.1/cif-experimental --output database/icsd.duckdb --commit-every 200
+build-icsd /path/to/DATA/ICSD/2026.1/cif-experimental --output database/icsd-expt.duckdb --commit-every 200
 # Disable the 1,000-primitive-site import safety limit:
-build-icsd /path/to/DATA/ICSD/2026.1/cif-experimental --no-filter
+build-icsd /path/to/DATA/ICSD/2026.1/cif-experimental --output database/icsd-expt.duckdb --no-filter
 ```
 
 Pass 1 retains both identifiers on the import row: `archive_id` is the numeric
@@ -119,9 +129,9 @@ DuckDB support installs with `python -m pip install '.[duckdb]'` (the `duckdb` a
 ## Pass 2 -- canonicalize
 
 ```sh
-build-icsd-canonicalize database/icsd.duckdb --output database/icsd-canonical.duckdb --lift --stats
-build-icsd-canonicalize database/icsd.duckdb --output database/icsd-canonical.duckdb --workers 8 --tolerance 0.01
-build-icsd-canonicalize database/icsd.duckdb --output database/icsd-canonical.duckdb --max-asu-sites 96
+build-icsd-canonicalize database/icsd-expt.duckdb --output database/icsd-expt-canonical.duckdb --lift --stats
+build-icsd-canonicalize database/icsd-expt.duckdb --output database/icsd-expt-canonical.duckdb --workers 8 --tolerance 0.01
+build-icsd-canonicalize database/icsd-expt.duckdb --output database/icsd-expt-canonical.duckdb --max-asu-sites 96
 ```
 
 The pass is **resumable through the destination database**: it processes only source
@@ -155,10 +165,10 @@ destination. A freshly built import database contains no pass-2 tables.
 ## Pass 3 -- distinct
 
 ```sh
-build-icsd-distinct database/icsd-canonical.duckdb --output database/icsd-distinct.duckdb --stats
-build-icsd-distinct database/icsd-canonical.duckdb --delta 0.5 --max-coverage-size 200
-build-icsd-distinct database/icsd-canonical.duckdb --max-coverage-size 1    # force greedy-leader
-build-icsd-distinct database/icsd-canonical.duckdb --grid-dimensions 2 --grid-strategy variance
+build-icsd-distinct database/icsd-expt-canonical.duckdb --output database/icsd-expt-distinct.duckdb --stats
+build-icsd-distinct database/icsd-expt-canonical.duckdb --delta 0.5 --max-coverage-size 200
+build-icsd-distinct database/icsd-expt-canonical.duckdb --max-coverage-size 1    # force greedy-leader
+build-icsd-distinct database/icsd-expt-canonical.duckdb --grid-dimensions 2 --grid-strategy variance
 ```
 
 The pass-2 `BarePrototype`/`BareProtostructure` carry no coordinates, so *within* one
@@ -228,7 +238,7 @@ from httk.store import Backend, SqlStore
 from httk.atomistic import BarePrototypeRecord, BareProtostructureRecord
 from build_icsd.layout import entry_records
 
-with Backend.duckdb("database/icsd-canonical.duckdb") as backend:
+with Backend.duckdb("database/icsd-expt-canonical.duckdb") as backend:
     store = SqlStore(backend, entry_records=entry_records())
     total = store.searcher(); total.variable(BareProtostructureRecord)
     print("bare protostructures:", total.count())
@@ -315,31 +325,34 @@ is performed. The import database and structures-only serving declaration are un
 
 ## DuckDB caveats
 
-- `HTTK_DUCKDB_MEMORY_LIMIT` defaults to 6 GB for both targets, and both run under a
+- `HTTK_DUCKDB_MEMORY_LIMIT` defaults to 6 GB for all build passes, which run under a
   24 GiB process-group RSS guard. DuckDB may spill to its adjacent temporary directory.
 
 ## Make targets and serving
 
-The Make targets default to `ICSD_PATH=../DATA/ICSD/2026.1/cif-experimental`, write under `database/`, and serve
-OPTIMADE at `http://127.0.0.1:8080/v1/structures`:
+The Make targets select the variant-specific CIF tree and write under `database/`.
+`make serve` serves the experimental canonical database; `make serve VARIANT=std`
+serves the standardized canonical database. Both expose OPTIMADE at `http://127.0.0.1:8080/v1/structures`:
 
 ```sh
-make build          # import database only
-make canonicalize   # source import database -> separate canonical database
-make distinct       # canonical database -> separate distinct-geometry database
-make serve          # serve the canonical database
-make build FORMAT=sqlite WORKERS=4 PROGRESS_EVERY=1000
-make canonicalize IMPORT_OUTPUT=database/icsd.duckdb CANONICAL_OUTPUT=database/catalog.duckdb
-make canonicalize CANONICAL_MAX_ASU_SITES=96
-make distinct DISTINCT_DELTA=0.5   # wider geometric-similarity budget (~ångström of atom travel)
-make distinct DISTINCT_MAX_COVERAGE_SIZE=200   # push more groups through greedy max-coverage
+make build_expt          # import database only
+make canonicalize_expt   # source import database -> separate canonical database
+make distinct_expt       # canonical database -> separate distinct-geometry database
+make serve          # serve the experimental canonical database
+make serve VARIANT=std  # serve the standardized canonical database
+# Use _std instead of _expt below for standardized CIFs:
+make build_expt FORMAT=sqlite WORKERS=4 PROGRESS_EVERY=1000
+make canonicalize_expt IMPORT_OUTPUT=database/icsd-expt.duckdb CANONICAL_OUTPUT=database/catalog.duckdb
+make canonicalize_expt CANONICAL_MAX_ASU_SITES=96
+make distinct_expt DISTINCT_DELTA=0.5   # wider geometric-similarity budget (~ångström of atom travel)
+make distinct_expt DISTINCT_MAX_COVERAGE_SIZE=200   # push more groups through greedy max-coverage
 ```
 
 The default uses two projections selected by variance, as favored by the initial
-grid sweep. The explicit equivalent of `make distinct` is:
+grid sweep. The explicit equivalent of `make distinct_expt` is:
 
 ```sh
-make distinct DISTINCT_GRID_DIMENSIONS=2 DISTINCT_GRID_STRATEGY=variance
+make distinct_expt DISTINCT_GRID_DIMENSIONS=2 DISTINCT_GRID_STRATEGY=variance
 ```
 
 `DISTINCT_GRID_DIMENSIONS=0` disables the grid. The grid can

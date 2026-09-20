@@ -1,5 +1,7 @@
 import json
+import shlex
 import sqlite3
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -25,6 +27,38 @@ def test_discovery_selects_experimental_tree_and_resolves_paths(tmp_path: Path, 
 
     assert _cif_paths(Path("2026.1")) == (path,)
     assert _cif_paths(root / "cif-experimental") == (path,)
+    assert _cif_paths(root / "cif-standardized") == (standardized,)
+
+
+@pytest.mark.parametrize("fmt", ["duckdb", "sqlite"])
+def test_make_routes_both_variants_through_separate_databases(fmt: str) -> None:
+    root = Path(__file__).resolve().parents[1]
+    targets = [f"{stage}_{variant}" for stage in ("build", "canonicalize", "distinct") for variant in ("expt", "std")]
+    result = subprocess.run(
+        ["make", "--no-print-directory", "-n", *targets, f"FORMAT={fmt}", "WORKERS=1", "VARIANT=std"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    commands = [shlex.split(line) for line in result.stdout.splitlines() if " -m build_icsd" in line]
+    assert len(commands) == 6
+    for args, target in zip(commands, targets, strict=True):
+        stage, variant = target.split("_")
+        imported = f"database/icsd-{variant}.{fmt}"
+        canonical = f"database/icsd-{variant}-canonical.{fmt}"
+        distinct = f"database/icsd-{variant}-distinct.{fmt}"
+        if stage == "build":
+            tree = "experimental" if variant == "expt" else "standardized"
+            assert f"ICSD_PATH=../DATA/ICSD/2026.1/cif-{tree}" in args
+            assert args[args.index("-m") + 1] == "build_icsd"
+            expected_output = imported
+        else:
+            module = f"build_icsd.{stage}"
+            assert args[args.index(module) + 1] == (imported if stage == "canonicalize" else canonical)
+            expected_output = canonical if stage == "canonicalize" else distinct
+        assert args[args.index("--output") + 1] == expected_output
+        assert args[args.index("--format") + 1] == fmt
 
 
 def test_build_icsd_cli_with_icsd_path_fallback(tmp_path: Path, monkeypatch, capsys) -> None:
