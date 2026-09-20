@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import duckdb
 import pytest
 
-from build_cod import distinct
+from build_icsd import distinct
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "benchmarks"))
 bench_distinct_grid = import_module("bench_distinct_grid")
@@ -21,10 +21,10 @@ def _database(tmp_path: Path, *, legacy: bool, kind: str) -> Path:
     group_column = f"{kind}_content_id" if legacy else f"bare_{kind}_content_id"
     with duckdb.connect(str(database)) as connection:
         connection.execute(
-            f"CREATE TABLE cod_canonicalization (canonical_content_id VARCHAR, {group_column} VARCHAR, error VARCHAR)"
+            f"CREATE TABLE icsd_canonicalization (canonical_content_id VARCHAR, {group_column} VARCHAR, error VARCHAR)"
         )
         connection.executemany(
-            "INSERT INTO cod_canonicalization VALUES (?, ?, NULL)",
+            "INSERT INTO icsd_canonicalization VALUES (?, ?, NULL)",
             [("member-b", "group-key"), ("member-a", "group-key")],
         )
     return database

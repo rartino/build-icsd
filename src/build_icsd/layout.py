@@ -7,8 +7,8 @@ and runs.
 
 Only the OPTIMADE ``structures`` family is declared. The pass-2 records
 (``atomistic_bare_protostructure``, ``atomistic_bare_prototype``, ``core_run`` and
-``cod_canonicalization``) are stored as on-demand internal tables, exactly like the
-pass-1 ``cod_structure_import`` table: they need no entry declaration to be saved or
+``icsd_canonicalization``) are stored as on-demand internal tables, exactly like the
+pass-1 ``icsd_structure_import`` table: they need no entry declaration to be saved or
 queried. Keeping them out of the entry declaration is deliberate -- adding them would make
 the OPTIMADE server try to serve families that have no served definition yet (serving is
 out of scope for now). A minimal declaration is the right default regardless. See README
@@ -30,5 +30,5 @@ def entry_records() -> dict[type, type | tuple[type, ...]]:
 
 
 def entry_id_scheme() -> EntryIdScheme:
-    """Return the stable COD entry-id namespace used by both build passes."""
-    return EntryIdScheme("cod", "1")
+    """Return the stable ICSD entry-id namespace used by both build passes."""
+    return EntryIdScheme("icsd", "1")

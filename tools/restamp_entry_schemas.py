@@ -20,7 +20,7 @@ import duckdb
 from httk.store.backend.sql.layout import normalize_entry_declaration
 from httk.store.storage_layout import schema_fingerprint_diff, schema_fingerprint_json
 
-from build_cod.layout import entry_records
+from build_icsd.layout import entry_records
 
 _METADATA_TABLE = "_httk_store_metadata"
 

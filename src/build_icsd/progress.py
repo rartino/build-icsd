@@ -1,4 +1,4 @@
-"""Shared progress and completion-time prognosis for the two COD build passes."""
+"""Shared progress and completion-time prognosis for the two ICSD build passes."""
 
 import math
 import time

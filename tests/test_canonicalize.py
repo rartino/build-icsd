@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from build_cod.canonicalize import (
+from build_icsd.canonicalize import (
     WORKFLOW_URI,
     _bounded_results,
     _canonicalize_one,
@@ -15,10 +15,10 @@ from build_cod.canonicalize import (
     _Result,
     _write_batch,
 )
-from build_cod.canonicalize import main as canon_main
-from build_cod.cli import main as build_main
-from build_cod.layout import entry_id_scheme, entry_records
-from build_cod.records import CanonicalizationRecord, StructureImportRecord
+from build_icsd.canonicalize import main as canon_main
+from build_icsd.cli import main as build_main
+from build_icsd.layout import entry_id_scheme, entry_records
+from build_icsd.records import CanonicalizationRecord, StructureImportRecord
 
 # A rocksalt NaCl declared in P1 (identity symmetry) whose coordinates recognition
 # lifts to Fm-3m (IT 225); the two copies are the "same crystal, two files" case.
@@ -93,18 +93,22 @@ _atom_site_label
 C1
 """
 
-BLACKLISTED = NACL_P1.replace("data_nacl", "data_blacklisted\n_journal_name_full 'Organic Letters'", 1)
+BLACKLISTED = NACL_P1.replace(
+    "data_nacl",
+    "data_blacklisted\nloop_\n_citation_id\n_citation_journal_full\nprimary 'Organic Letters'",
+    1,
+)
 
 
 def _fixture(tmp_path: Path) -> Path:
-    cif = tmp_path / "COD" / "cif"
+    cif = tmp_path / "ICSD" / "cif"
     cif.mkdir(parents=True)
     (cif / "nacl_a.cif").write_text(NACL_P1, encoding="utf-8")
     (cif / "nacl_dup.cif").write_text(NACL_P1, encoding="utf-8")
     (cif / "autoc.cif").write_text(AUTOCORRECT, encoding="utf-8")
     (cif / "broken.cif").write_text(BROKEN, encoding="utf-8")
     (cif / "blacklisted.cif").write_text(BLACKLISTED, encoding="utf-8")
-    return tmp_path / "COD"
+    return tmp_path / "ICSD"
 
 
 def _open_store(database: Path, fmt: str):
@@ -144,7 +148,7 @@ def _table_names(backend) -> set[str]:
 
 
 def test_canonicalization_rejects_the_source_as_its_output(tmp_path: Path) -> None:
-    database = tmp_path / "cod.sqlite"
+    database = tmp_path / "icsd.sqlite"
     database.touch()
     with pytest.raises(SystemExit):
         canon_main([str(database), "--output", str(database), "--format", "sqlite"])
@@ -161,18 +165,18 @@ def test_two_pass_import_and_canonicalization(tmp_path: Path, fmt: str) -> None:
         pytest.importorskip("duckdb_engine")
     from httk.atomistic import BareProtostructureRecord, BarePrototypeRecord
 
-    from build_cod.records import StructureImportRecord
+    from build_icsd.records import StructureImportRecord
 
-    cod = _fixture(tmp_path)
-    source = tmp_path / f"cod.{fmt}"
-    canonical = tmp_path / f"cod-canonical.{fmt}"
-    assert build_main([str(cod), "--format", fmt, "--output", str(source), "--workers", "2"]) == 0
+    icsd = _fixture(tmp_path)
+    source = tmp_path / f"icsd.{fmt}"
+    canonical = tmp_path / f"icsd-canonical.{fmt}"
+    assert build_main([str(icsd), "--format", fmt, "--output", str(source), "--workers", "2"]) == 0
     assert canon_main([str(source), "--output", str(canonical), "--format", fmt, "--workers", "2", "--lift"]) == 0
 
     backend, SqlStore = _open_store(source, fmt)
     with backend:
         store = SqlStore(backend, entry_records=entry_records())
-        assert "cod_canonicalization" not in _table_names(backend)
+        assert "icsd_canonicalization" not in _table_names(backend)
         assert _count(store, StructureImportRecord) == 5
         assert _count(store, StructureImportRecord, lambda v: v.error != None) == 1
         imports = {}
@@ -189,7 +193,7 @@ def test_two_pass_import_and_canonicalization(tmp_path: Path, fmt: str) -> None:
     backend, SqlStore = _open_store(canonical, fmt)
     with backend:
         store = SqlStore(backend, entry_records=entry_records())
-        assert "cod_structure_import" not in _table_names(backend)
+        assert "icsd_structure_import" not in _table_names(backend)
         rows = _canonicalization_rows(store)
 
         # The broken import and journal-blacklisted import do not enter the canonical catalog.
@@ -237,7 +241,7 @@ def test_two_pass_import_and_canonicalization(tmp_path: Path, fmt: str) -> None:
         root_rows = connection.execute(
             """
             SELECT c.original_content_id, c.canonical_content_id, canonical._httk_role
-            FROM cod_canonicalization c
+            FROM icsd_canonicalization c
             JOIN atomistic_asu_structure canonical ON canonical.content_id = c.canonical_content_id
             WHERE c.error IS NULL
             """
@@ -258,10 +262,10 @@ def test_resume_is_duplicate_free_and_complete(tmp_path: Path, fmt: str) -> None
         pytest.importorskip("duckdb_engine")
     from httk.atomistic import BareProtostructureRecord
 
-    cod = _fixture(tmp_path)
-    source = tmp_path / f"cod.{fmt}"
-    canonical = tmp_path / f"cod-canonical.{fmt}"
-    assert build_main([str(cod), "--format", fmt, "--output", str(source), "--workers", "2"]) == 0
+    icsd = _fixture(tmp_path)
+    source = tmp_path / f"icsd.{fmt}"
+    canonical = tmp_path / f"icsd-canonical.{fmt}"
+    assert build_main([str(icsd), "--format", fmt, "--output", str(source), "--workers", "2"]) == 0
 
     # Interrupt after one, then finish; the anti-join must not reprocess or duplicate.
     assert canon_main([str(source), "--output", str(canonical), "--format", fmt, "--workers", "1", "--limit", "1"]) == 0
@@ -306,7 +310,7 @@ def test_worker_records_a_canonicalization_error(tmp_path: Path) -> None:
 
 
 def test_worker_skips_large_asu_before_canonicalization(monkeypatch: pytest.MonkeyPatch) -> None:
-    import build_cod.canonicalize as canonicalize_module
+    import build_icsd.canonicalize as canonicalize_module
 
     class FakeView:
         def __init__(self, _record) -> None:
@@ -333,11 +337,11 @@ def test_worker_canonicalizes_once_then_normalizes_chirality_for_derivation(
     from httk.atomistic.symmetry import canonical as atomistic_canonical_module
     from httk.core.storage import content_id
 
-    import build_cod.canonicalize as canonicalize_module
+    import build_icsd.canonicalize as canonicalize_module
 
-    cod = _fixture(tmp_path)
-    database = tmp_path / "cod.sqlite"
-    assert build_main([str(cod), "--format", "sqlite", "--output", str(database), "--workers", "1"]) == 0
+    icsd = _fixture(tmp_path)
+    database = tmp_path / "icsd.sqlite"
+    assert build_main([str(icsd), "--format", "sqlite", "--output", str(database), "--workers", "1"]) == 0
 
     backend, SqlStore = _open_store(database, "sqlite")
     with backend:
@@ -438,12 +442,12 @@ def test_bounded_results_keeps_input_consumption_within_the_window() -> None:
 
 def test_retry_errors_converges_after_a_successful_retry(tmp_path: Path) -> None:
     pytest.importorskip("spglib")
-    cif = tmp_path / "COD" / "cif"
+    cif = tmp_path / "ICSD" / "cif"
     cif.mkdir(parents=True)
     (cif / "nacl_a.cif").write_text(NACL_P1, encoding="utf-8")
-    source = tmp_path / "cod.sqlite"
-    canonical = tmp_path / "cod-canonical.sqlite"
-    assert build_main([str(tmp_path / "COD"), "--format", "sqlite", "--output", str(source)]) == 0
+    source = tmp_path / "icsd.sqlite"
+    canonical = tmp_path / "icsd-canonical.sqlite"
+    assert build_main([str(tmp_path / "ICSD"), "--format", "sqlite", "--output", str(source)]) == 0
 
     source_backend, SqlStore = _open_store(source, "sqlite")
     destination_backend, _SqlStore = _open_store(canonical, "sqlite")
@@ -479,7 +483,15 @@ def test_retry_errors_converges_after_a_successful_retry(tmp_path: Path) -> None
     # A second --retry-errors run over the CLI must add nothing (no re-canonicalization).
     assert (
         canon_main(
-            [str(tmp_path / "cod.sqlite"), "--output", str(canonical), "--format", "sqlite", "--retry-errors", "--lift"]
+            [
+                str(tmp_path / "icsd.sqlite"),
+                "--output",
+                str(canonical),
+                "--format",
+                "sqlite",
+                "--retry-errors",
+                "--lift",
+            ]
         )
         == 0
     )

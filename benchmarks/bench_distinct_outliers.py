@@ -19,8 +19,8 @@ from httk.atomistic.symmetry import _numpy_travel, paths
 from httk.atomistic.symmetry.comparison_cache import StructureComparisonCache
 from httk.store import Backend, SqlStore
 
-from build_cod import distinct
-from build_cod.layout import entry_id_scheme, entry_records
+from build_icsd import distinct
+from build_icsd.layout import entry_id_scheme, entry_records
 
 
 @contextmanager

@@ -1,6 +1,6 @@
 """Remeasure a fixed stratified sample in one read-only distinct worker.
 
-Run from build-cod with PYTHONPATH=src. Timed runs require POSIX interval timers;
+Run from build-icsd with PYTHONPATH=src. Timed runs require POSIX interval timers;
 use --timeout 0 to disable the per-group deadline.
 """
 
@@ -22,8 +22,8 @@ from httk.atomistic.models.prototype.api import PrototypeAPI
 from httk.atomistic.symmetry.comparison_grid import StructureComparisonGrid
 from httk.store import Backend, SqlStore
 
-from build_cod import distinct
-from build_cod.layout import entry_id_scheme, entry_records
+from build_icsd import distinct
+from build_icsd.layout import entry_id_scheme, entry_records
 
 
 class _GroupTimeout(BaseException):

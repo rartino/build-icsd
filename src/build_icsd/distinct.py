@@ -1,21 +1,21 @@
 """Pass 3: condense each Wyckoff prototype/protostructure into distinct geometric classes.
 
-Pass 2 (:mod:`build_cod.canonicalize`) discriminates structures by Wyckoff data only, so every
-COD entry sharing a space group and anonymous/assigned Wyckoff occupation collapses onto one
+Pass 2 (:mod:`build_icsd.canonicalize`) discriminates structures by Wyckoff data only, so every
+ICSD entry sharing a space group and anonymous/assigned Wyckoff occupation collapses onto one
 ``BarePrototype`` (element-agnostic) and one ``BareProtostructure`` (species-assigned), with no
 coordinates retained. This pass reads those groups back, attaches each member structure's exact
 coordinates as a geometrical *representative*, and clusters the members so that only geometrically
 distinct representatives remain -- the ones for which :meth:`Prototype.similar` /
 :meth:`Protostructure.similar` returns ``False`` against every kept representative.
 
-Grouping is a cross-database read of the pass-2 ``cod_canonicalization`` rows: all canonical
+Grouping is a cross-database read of the pass-2 ``icsd_canonicalization`` rows: all canonical
 structures sharing a ``bare_prototype_content_id`` form one prototype group, and likewise for
 ``bare_protostructure_content_id``. Each group is clustered independently in a worker with the
 greedy-leader rule the user asked for: walk the members, and a member becomes a new kept
 representative exactly when it is ``similar`` to none of the representatives kept so far.
 
-The results go to a separate ``-distinct`` database: one ``cod_distinct_prototype`` /
-``cod_distinct_protostructure`` row per kept representative, holding the Wyckoff group key, the
+The results go to a separate ``-distinct`` database: one ``icsd_distinct_prototype`` /
+``icsd_distinct_protostructure`` row per kept representative, holding the Wyckoff group key, the
 representative-carrying record (coordinates included), the source structure chosen as the
 representative, and how many distinct members collapsed onto it. A group already present in the
 output is skipped (that cross-database anti-join is the resume mechanism, exactly as in pass 2).
@@ -55,9 +55,9 @@ from httk.atomistic.storage.records import (
 from httk.core.storage import StorageInfo, content_id
 from httk.store import Backend, SqlStore
 
-from build_cod.layout import entry_id_scheme, entry_records
-from build_cod.progress import CompletionPrognosis
-from build_cod.records import CanonicalizationRecord
+from build_icsd.layout import entry_id_scheme, entry_records
+from build_icsd.progress import CompletionPrognosis
+from build_icsd.records import CanonicalizationRecord
 
 _DEFAULT_DELTA = 0.1
 _DEFAULT_MAX_COVERAGE_SIZE = 150
@@ -82,8 +82,8 @@ class DistinctPrototypeRecord:
     """
 
     __httk_storage__: ClassVar[StorageInfo] = StorageInfo(
-        storage_name="cod_distinct_prototype",
-        identity_name="cod_distinct_prototype",
+        storage_name="icsd_distinct_prototype",
+        identity_name="icsd_distinct_prototype",
         indexes=(("bare_content_id",),),
     )
 
@@ -107,8 +107,8 @@ class DistinctProtostructureRecord:
     """
 
     __httk_storage__: ClassVar[StorageInfo] = StorageInfo(
-        storage_name="cod_distinct_protostructure",
-        identity_name="cod_distinct_protostructure",
+        storage_name="icsd_distinct_protostructure",
+        identity_name="icsd_distinct_protostructure",
         indexes=(("bare_content_id",),),
     )
 
@@ -295,7 +295,7 @@ def _fetch_members(cids: tuple[str, ...]) -> list[tuple[str, Any]]:
             _LOGGER.warning(
                 "canonical structure %s missing from source; skipping",
                 cid,
-                extra={"context": "cod-distinct"},
+                extra={"context": "icsd-distinct"},
             )
             continue
         members.append((cid, record))
@@ -374,10 +374,10 @@ def _group_members(store: SqlStore) -> tuple[dict[str, set[str]], dict[str, set[
 
     Only current-state successes are read (``error IS NULL``); superseded retry rows carry no
     canonical id. Members are deduplicated by canonical content id, so identical crystals across
-    several COD files collapse for free before any geometry is compared.
+    several ICSD files collapse for free before any geometry is compared.
     """
     # ponytail: the whole group index (every group key + all member content-ids) is held in
-    # memory -- O(corpus), a few hundred MB at full-COD scale. Stream from an ordered GROUP BY
+    # memory -- O(corpus), a few hundred MB in the original COD run. Stream from an ordered GROUP BY
     # scan and cluster one key at a time if that ever exceeds the box.
     prototype_groups: dict[str, set[str]] = {}
     protostructure_groups: dict[str, set[str]] = {}
@@ -512,7 +512,7 @@ def _stream_ingest(
     """Persist clustered results through periodic ``finalize="parity"`` bulk-ingests.
 
     A single ``deferred`` ingest keeps an in-memory occurrence index for the whole stream (and a
-    single ``parity`` transaction keeps every uncommitted row), so a full COD pass exhausts memory.
+    single ``parity`` transaction keeps every uncommitted row), which exhausted memory on COD.
     Instead a fresh parity ingest is opened per ``commit_every`` groups: parity flushes each
     ``ingest_chunk`` to the database and clears its buffers, and each commit releases the
     transaction's memory *and* makes those groups durable -- so memory stays bounded and an

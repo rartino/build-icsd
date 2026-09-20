@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from build_cod.progress import CompletionPrognosis, _duration_text
+from build_icsd.progress import CompletionPrognosis, _duration_text
 
 
 def test_prognosis_updates_from_all_observed_timing() -> None:

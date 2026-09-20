@@ -6,8 +6,8 @@ from pathlib import Path
 import pytest
 from httk.core.storage import content_id
 
-from build_cod import distinct
-from build_cod.distinct import (
+from build_icsd import distinct
+from build_icsd.distinct import (
     DistinctProtostructureRecord,
     DistinctPrototypeRecord,
     _bare_record,
@@ -20,7 +20,7 @@ from build_cod.distinct import (
     _distinct_record,
     _save_records,
 )
-from build_cod.distinct import (
+from build_icsd.distinct import (
     main as distinct_main,
 )
 
@@ -45,9 +45,9 @@ def _stub_fetch(monkeypatch, members):
 
 
 def test_default_output_swaps_canonical_for_distinct() -> None:
-    assert _default_output(Path("database/cod-canonical.duckdb")) == Path("database/cod-distinct.duckdb")
-    assert _default_output(Path("cod-canonical.sqlite")) == Path("cod-distinct.sqlite")
-    assert _default_output(Path("cod.duckdb")) == Path("cod-distinct.duckdb")
+    assert _default_output(Path("database/icsd-canonical.duckdb")) == Path("database/icsd-distinct.duckdb")
+    assert _default_output(Path("icsd-canonical.sqlite")) == Path("icsd-distinct.sqlite")
+    assert _default_output(Path("icsd.duckdb")) == Path("icsd-distinct.duckdb")
 
 
 @pytest.mark.parametrize("kind", ["prototype", "protostructure"])
@@ -131,7 +131,7 @@ def test_distinct_records_persist_representative_coordinates(tmp_path: Path) -> 
     record = _distinct_record("prototype", content_id(bare), "cid-small", 1, value)
     result = distinct._GroupResult("prototype", content_id(bare), (record,), None, "cover", bare)
 
-    database = tmp_path / "cod-distinct.sqlite"
+    database = tmp_path / "icsd-distinct.sqlite"
     with Backend.sqlite(database) as backend:
         store = SqlStore(backend, entry_records={})
         with store.bulk_ingest(finalize="parity", track_sids=False) as bulk:
@@ -158,7 +158,7 @@ def test_save_records_appends_across_ingests_and_skips_errors(tmp_path: Path) ->
 
     error = distinct._GroupResult("prototype", "wyk-bad", (), "boom", None)
 
-    with Backend.sqlite(tmp_path / "cod-distinct.sqlite") as backend:
+    with Backend.sqlite(tmp_path / "icsd-distinct.sqlite") as backend:
         store = SqlStore(backend, entry_records={})
         # First ingest writes the tables (empty-store path); the error contributes nothing.
         with store.bulk_ingest(finalize="parity", track_sids=False) as bulk:
@@ -173,8 +173,8 @@ def test_stream_ingest_commits_periodically_and_persists_all(tmp_path: Path) -> 
     pytest.importorskip("spglib")
     from httk.store import Backend, SqlStore
 
-    from build_cod.distinct import _stream_ingest
-    from build_cod.progress import CompletionPrognosis
+    from build_icsd.distinct import _stream_ingest
+    from build_icsd.progress import CompletionPrognosis
 
     def _result(cid: str) -> object:
         value = _build_value("prototype", _rocksalt(cid))
@@ -185,7 +185,7 @@ def test_stream_ingest_commits_periodically_and_persists_all(tmp_path: Path) -> 
     results = [(None, _result(a)) for a in ("5.60", "5.70", "5.80")]
     results.append((None, distinct._GroupResult("prototype", "wyk-bad", (), "boom", None)))
 
-    with Backend.sqlite(tmp_path / "cod-distinct.sqlite") as backend:
+    with Backend.sqlite(tmp_path / "icsd-distinct.sqlite") as backend:
         store = SqlStore(backend, entry_records={})
         # commit_every=1 forces a separate parity ingest (and durable commit) per group.
         processed, written, errors, leaders = _stream_ingest(
@@ -220,8 +220,8 @@ def test_end_to_end_distinct_over_two_passes(tmp_path: Path, engine: str) -> Non
     from httk.atomistic import BareProtostructureRecord, BarePrototypeRecord, ProtostructureRecord, PrototypeRecord
     from httk.store import Backend, SqlStore
 
-    from build_cod.canonicalize import main as canon_main
-    from build_cod.cli import main as build_main
+    from build_icsd.canonicalize import main as canon_main
+    from build_icsd.cli import main as build_main
 
     # Two identical rocksalt files and one stretched rocksalt (same Wyckoff prototype, different
     # geometry). NaCl P1 lifts to Fm-3m 225 during canonicalization.
@@ -252,16 +252,16 @@ Cl2 Cl 0.5 0.0 0.0
 Cl3 Cl 0.0 0.5 0.0
 Cl4 Cl 0.0 0.0 0.5
 """
-    cif = tmp_path / "COD" / "cif"
+    cif = tmp_path / "ICSD" / "cif"
     cif.mkdir(parents=True)
     (cif / "nacl_a.cif").write_text(nacl.format(a="5.64"), encoding="utf-8")
     (cif / "nacl_dup.cif").write_text(nacl.format(a="5.64"), encoding="utf-8")
     (cif / "nacl_big.cif").write_text(nacl.format(a="8.0"), encoding="utf-8")
 
-    source = tmp_path / f"cod.{engine}"
-    canonical = tmp_path / f"cod-canonical.{engine}"
-    distinct_db = tmp_path / f"cod-distinct.{engine}"
-    assert build_main([str(tmp_path / "COD"), "--format", engine, "--output", str(source)]) == 0
+    source = tmp_path / f"icsd.{engine}"
+    canonical = tmp_path / f"icsd-canonical.{engine}"
+    distinct_db = tmp_path / f"icsd-distinct.{engine}"
+    assert build_main([str(tmp_path / "ICSD"), "--format", engine, "--output", str(source)]) == 0
     assert canon_main([str(source), "--output", str(canonical), "--format", engine]) == 0
 
     # This exercises the real per-worker read-only fetch path (the pool initializer opens the

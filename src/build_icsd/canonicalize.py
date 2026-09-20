@@ -1,12 +1,12 @@
 """Pass 2: canonicalize imported structures and derive prototypes and protostructures.
 
-Pass 1 (``build_cod.cli``) imports every COD CIF into a source database. This pass reads
-each import that holds a structure and has no ``cod_canonicalization`` row in a separate
+Pass 1 (``build_icsd.cli``) imports every ICSD CIF into a source database. This pass reads
+each import that holds a structure and has no ``icsd_canonicalization`` row in a separate
 destination database yet (that cross-database anti-join is the resume mechanism),
 canonicalizes it with :func:`~httk.atomistic.canonical_asu`, derives its ``BareProtostructure``
 and ``BarePrototype``, and records only the canonical structure, the two derived values, a
 provenance :class:`~httk.core.provenance.Run`, and one
-:class:`~build_cod.records.CanonicalizationRecord` linking them back to the source import.
+:class:`~build_icsd.records.CanonicalizationRecord` linking them back to the source import.
 
 Compute (recognition + lifting + derivation) runs in a process pool; a single writer in
 the main process saves results in chunked transactions.
@@ -40,16 +40,16 @@ from httk.core.provenance import Run, RunEdge
 from httk.core.storage import content_id
 from httk.store import Backend, SqlStore
 
-from build_cod.layout import entry_id_scheme, entry_records
-from build_cod.progress import CompletionPrognosis
-from build_cod.records import (
+from build_icsd.layout import entry_id_scheme, entry_records
+from build_icsd.progress import CompletionPrognosis
+from build_icsd.records import (
     CanonicalizationRecord,
     StructureImportRecord,
     _error_text,
     _journal_exclusion_for_title,
 )
 
-WORKFLOW_URI = "https://schemas.httk.org/defs/v0.1/workflows/cod-canonicalization"
+WORKFLOW_URI = "https://schemas.httk.org/defs/v0.1/workflows/icsd-canonicalization"
 _DEFAULT_MAX_ASU_SITES = 64
 
 
@@ -264,7 +264,7 @@ def _positive_int(value: str) -> int:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Canonicalize imported COD structures and derive prototypes.")
+    parser = argparse.ArgumentParser(description="Canonicalize imported ICSD structures and derive prototypes.")
     parser.add_argument("source_database", type=Path, help="the existing pass-1 import database")
     parser.add_argument(
         "--output",

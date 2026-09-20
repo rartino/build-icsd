@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from build_cod import records
+from build_icsd import records
 
 
 def test_structure_import_projection_collects_warning_and_error(tmp_path: Path, monkeypatch) -> None:
@@ -190,3 +190,95 @@ def test_journal_scanner_skips_loop_column_but_reads_later_scalar(tmp_path: Path
     )
 
     assert records._journal_exclusion(path) == "journal blacklist: Organometallics"
+
+
+@pytest.mark.parametrize("fails", [False, True])
+def test_import_keeps_distinct_archive_and_collection_ids(tmp_path: Path, monkeypatch, fails: bool) -> None:
+    path = tmp_path / "2.cif"
+    path.write_text("data_example\n_database_code_ICSD 5\n", encoding="utf-8")
+    structure = object()
+
+    class View:
+        def __init__(self, source: Path) -> None:
+            assert source == path
+
+        def unview(self) -> object:
+            if fails:
+                raise ValueError("invalid structure")
+            return structure
+
+    monkeypatch.setattr(records, "ASUStructureView", View)
+    monkeypatch.setattr(records, "content_id", lambda *args, **kwargs: "content-id")
+    projected = records.StructureImportRecord.__httk_project__(
+        records.StructureImportRequest(path, filter_enabled=False)
+    )
+
+    assert projected["archive_id"] == "2"
+    assert projected["icsd_code"] == "5"
+    assert projected["error"] == ("invalid structure" if fails else None)
+    assert projected["structure"] is (None if fails else structure)
+    records.StructureImportRecord(**projected)
+
+
+@pytest.mark.parametrize("code", ["?", ".", "'not a code'"])
+def test_import_unknown_identifiers_remain_absent(tmp_path: Path, code: str) -> None:
+    path = tmp_path / "unknown.cif"
+    path.write_text(f"data_example\n_database_code_ICSD {code}\n", encoding="utf-8")
+
+    result = records._read_structure(records.StructureImportRequest(path))
+
+    assert result.archive_id is None
+    assert result.icsd_code is None
+    assert result.error is not None
+
+
+def test_journal_reads_primary_icsd_citation_with_multiline_text(tmp_path: Path) -> None:
+    path = tmp_path / "citation.cif"
+    path.write_text(
+        "data_example\n"
+        "loop_\n_citation_id\n_citation_journal_full\n_citation_year\n"
+        "secondary 'A Different Journal' 2001\n"
+        "primary\n;\nOrganic &amp;\nBiomolecular Chemistry\n; 2002\n",
+        encoding="utf-8",
+    )
+
+    assert records._journal_title(path) == "Organic &amp;\nBiomolecular Chemistry"
+    assert records._journal_exclusion(path) == "journal blacklist: Organic &amp;\nBiomolecular Chemistry"
+
+
+@pytest.mark.parametrize(
+    "citations",
+    [
+        "secondary 'Organic Letters' 2000\n",
+        "primary 'Organic Letters' 2000\nprimary 'Organometallics' 2001\n",
+        "primary 'Organic Letters'\n",
+        "primary ? 2000\n",
+    ],
+)
+def test_uncertain_icsd_citation_never_filters(tmp_path: Path, citations: str) -> None:
+    path = tmp_path / "citation.cif"
+    path.write_text(
+        "data_example\nloop_\n_citation_id\n_citation_journal_full\n_citation_year\n" + citations,
+        encoding="utf-8",
+    )
+
+    assert records._journal_exclusion(path) is None
+
+
+def test_metadata_diagnostics_are_collected_with_import_failure(tmp_path: Path, monkeypatch) -> None:
+    path = tmp_path / "2.cif"
+    path.write_text("data_example\n_database_code_ICSD 5\n", encoding="utf-8")
+
+    def failed_metadata(source: Path):
+        assert source == path
+        logging.getLogger("httk.test").warning("uncertain citation metadata")
+        raise ValueError("metadata parse failed")
+
+    monkeypatch.setattr(records, "read_cif", failed_metadata)
+    result = records._read_structure(records.StructureImportRequest(path))
+
+    assert result.archive_id == "2"
+    assert result.icsd_code == "5"
+    assert result.journal_name is None
+    assert result.error is not None
+    assert any(json.loads(report)["message"] == "uncertain citation metadata" for report in result.reports)

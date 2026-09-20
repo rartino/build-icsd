@@ -1,5 +1,12 @@
 # Distinct comparison benchmarks
 
+The measurements, group IDs, CSV files, and commands below are historical **COD**
+results copied with the original repository; they are not ICSD measurements.
+The Python benchmark tools in this checkout now import `build_icsd` and query
+`icsd_canonicalization`. To use them on ICSD, substitute
+`database/icsd-canonical.duckdb` and group IDs from that database. Reproducing the
+historical COD runs requires the original `build-cod` checkout.
+
 `bench_distinct.py` reads explicitly selected groups from the canonical DuckDB database,
 runs the complete clustering operation with the grid disabled, and prints JSON timing and
 representative results. To measure the current two-dimensional default, use

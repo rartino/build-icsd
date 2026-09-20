@@ -1,4 +1,4 @@
-"""Storage record for one resilient COD structure import."""
+"""Storage record for one resilient ICSD structure import."""
 
 import html
 import json
@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import ClassVar
 
 from httk.atomistic import ASUStructure, ASUStructureRecord, ASUStructureView, primitive_cell
+from httk.atomistic.io.cif import read_cif
 from httk.core import load
 from httk.core.report import JsonFormatter, collect_reports
 from httk.core.storage import StorageInfo, content_id
@@ -48,6 +49,8 @@ class _StructureImportWorkerResult(_StructureImportSource):
     error: str | None
     autocorrect_attempted: bool
     autocorrected: bool
+    archive_id: str | None = None
+    icsd_code: str | None = None
 
 
 def _normalize_journal(value: str) -> str:
@@ -88,7 +91,7 @@ def _cif_semicolon_value(first_line: str, lines) -> str | None:
     return None
 
 
-def _journal_title(path: Path) -> str | None:
+def _scalar_metadata(path: Path, tag: str) -> str | None:
     try:
         with path.open(encoding="utf-8", errors="strict") as stream:
             lines = iter(stream)
@@ -109,7 +112,7 @@ def _journal_title(path: Path) -> str | None:
                 if token == "loop_":
                     loop_headers = True
                     continue
-                if token != "_journal_name_full":
+                if token != tag:
                     continue
                 if len(tokens) == 2 and not tokens[1].lstrip().startswith("#"):
                     return _cif_scalar(tokens[1])
@@ -125,6 +128,32 @@ def _journal_title(path: Path) -> str | None:
     except Exception:  # noqa: BLE001 - uncertain metadata must never exclude a structure
         return None
     return None
+
+
+def _journal_title(path: Path) -> str | None:
+    title = _scalar_metadata(path, "_journal_name_full")
+    if title is not None:
+        return title
+    try:
+        with collect_reports(level="info") as reports:
+            blocks, _header = read_cif(path)
+        if len(blocks) != 1 or reports.records:
+            return None
+        block = blocks[0][1]
+        citations = block.get("citation_id")
+        journals = block.get("citation_journal_full")
+        if not isinstance(citations, list) or not isinstance(journals, list) or len(citations) != len(journals):
+            return None
+        titles = [title for citation, title in zip(citations, journals) if citation.casefold() == "primary"]
+        if len(titles) == 1 and isinstance(titles[0], str) and titles[0].strip() not in ("", ".", "?"):
+            return titles[0]
+    except Exception:  # noqa: BLE001 - uncertain metadata must never exclude a structure
+        return None
+    return None
+
+
+def _numeric_identifier(value: str | None) -> str | None:
+    return value if value is not None and re.fullmatch(r"[0-9]+", value) else None
 
 
 def _journal_exclusion_for_title(title: str | None) -> str | None:
@@ -145,7 +174,7 @@ def _site_exclusion(structure: ASUStructure, path: Path) -> str | None:
             "could not determine primitive site count for %s; retaining structure: %s",
             path,
             error,
-            extra={"context": "cod-filter"},
+            extra={"context": "icsd-filter"},
         )
         return None
     if count > _MAX_PRIMITIVE_SITES:
@@ -180,11 +209,12 @@ def _read_structure(request: StructureImportRequest) -> _StructureImportWorkerRe
     path = request.path
     structure = None
     error_text = None
-    journal_name = _journal_title(path)
     exclusion_reason = None
     autocorrect_attempted = False
     autocorrected = False
     with collect_reports(level="info") as reports:
+        journal_name = _journal_title(path)
+        icsd_code = _numeric_identifier(_scalar_metadata(path, "_database_code_icsd"))
         try:
             structure = ASUStructureView(path).unview()
             if request.filter_enabled:
@@ -222,16 +252,22 @@ def _read_structure(request: StructureImportRequest) -> _StructureImportWorkerRe
         error_text,
         autocorrect_attempted,
         autocorrected,
+        _numeric_identifier(path.stem),
+        icsd_code,
     )
 
 
 @dataclass(frozen=True)
 class StructureImportRecord:
-    """Record one source path and its imported or failed ASU."""
+    """Record one source path and its imported or failed ASU.
+
+    ``archive_id`` comes from the numeric filename stem; ``icsd_code`` is the
+    separate ICSD collection code declared in the CIF. Both survive import failure.
+    """
 
     __httk_storage__: ClassVar[StorageInfo] = StorageInfo(
-        storage_name="cod_structure_import",
-        identity_name="cod_structure_import",
+        storage_name="icsd_structure_import",
+        identity_name="icsd_structure_import",
         indexes=(("source",), ("autocorrected",)),
     )
     __httk_canonical_source__: ClassVar[type[_StructureImportSource]] = _StructureImportSource
@@ -243,6 +279,8 @@ class StructureImportRecord:
     error: str | None
     autocorrect_attempted: bool
     autocorrected: bool
+    archive_id: str | None = None
+    icsd_code: str | None = None
 
     def __post_init__(self) -> None:
         reports = tuple(self.reports)
@@ -266,6 +304,8 @@ class StructureImportRecord:
             "error": result.error,
             "autocorrect_attempted": result.autocorrect_attempted,
             "autocorrected": result.autocorrected,
+            "archive_id": result.archive_id,
+            "icsd_code": result.icsd_code,
         }
 
 
@@ -274,7 +314,7 @@ class CanonicalizationRecord:
     """Record the pass-2 canonicalization outcome for one imported structure.
 
     Exactly one of ``canonical_content_id`` (success) or ``error`` (failure) is set.
-    ``source`` is the source database's importing ``cod_structure_import`` row path and is
+    ``source`` is the source database's importing ``icsd_structure_import`` row path and is
     the resume key: pass 2 processes imports whose ``source`` has no destination row yet.
     The content-id columns are loose references (the same layout-independent content
     identities used by the searcher and OPTIMADE serving) to the original and canonical
@@ -296,8 +336,8 @@ class CanonicalizationRecord:
     """
 
     __httk_storage__: ClassVar[StorageInfo] = StorageInfo(
-        storage_name="cod_canonicalization",
-        identity_name="cod_canonicalization",
+        storage_name="icsd_canonicalization",
+        identity_name="icsd_canonicalization",
         indexes=(("source",), ("bare_protostructure_content_id",)),
     )
 

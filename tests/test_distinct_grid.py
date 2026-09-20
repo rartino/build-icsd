@@ -2,9 +2,9 @@
 
 import pytest
 
-from build_cod import distinct
-from build_cod.distinct import _build_value, _catalog_counts, _cluster_cover, _cluster_leader
-from build_cod.distinct import main as distinct_main
+from build_icsd import distinct
+from build_icsd.distinct import _build_value, _catalog_counts, _cluster_cover, _cluster_leader
+from build_icsd.distinct import main as distinct_main
 
 
 def _rocksalt_values(kind: str):
@@ -100,8 +100,8 @@ def test_distinct_cli_runs_with_grid_on_temporary_database(tmp_path) -> None:
     pytest.importorskip("spglib")
     from httk.store import Backend, SqlStore
 
-    from build_cod.canonicalize import main as canonicalize_main
-    from build_cod.cli import main as build_main
+    from build_icsd.canonicalize import main as canonicalize_main
+    from build_icsd.cli import main as build_main
 
     cif = """data_nacl
 _cell_length_a 5.64
@@ -129,14 +129,14 @@ Cl2 Cl 0.5 0.0 0.0
 Cl3 Cl 0.0 0.5 0.0
 Cl4 Cl 0.0 0.0 0.5
 """
-    cif_dir = tmp_path / "COD" / "cif"
+    cif_dir = tmp_path / "ICSD" / "cif"
     cif_dir.mkdir(parents=True)
     (cif_dir / "nacl.cif").write_text(cif, encoding="utf-8")
-    source = tmp_path / "cod.sqlite"
-    canonical = tmp_path / "cod-canonical.sqlite"
-    distinct_db = tmp_path / "cod-distinct.sqlite"
+    source = tmp_path / "icsd.sqlite"
+    canonical = tmp_path / "icsd-canonical.sqlite"
+    distinct_db = tmp_path / "icsd-distinct.sqlite"
 
-    assert build_main([str(tmp_path / "COD"), "--format", "sqlite", "--output", str(source)]) == 0
+    assert build_main([str(tmp_path / "ICSD"), "--format", "sqlite", "--output", str(source)]) == 0
     assert canonicalize_main([str(source), "--format", "sqlite", "--output", str(canonical)]) == 0
     assert (
         distinct_main(

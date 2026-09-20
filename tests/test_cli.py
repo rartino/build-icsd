@@ -6,18 +6,34 @@ from types import SimpleNamespace
 import pytest
 from starlette.testclient import TestClient
 
-import build_cod.cli as cli_module
-from build_cod.cli import _emit_result_reports, _requests, main
-from build_cod.records import StructureImportRequest
-from serve_cod_optimade.cli import main as serve_main
+import build_icsd.cli as cli_module
+from build_icsd.cli import _cif_paths, _emit_result_reports, _requests, main
+from build_icsd.records import StructureImportRequest
+from serve_icsd_optimade.cli import main as serve_main
 
 
-def test_build_cod_cli_with_cod_path_fallback(tmp_path: Path, monkeypatch, capsys) -> None:
-    cod = tmp_path / "COD"
-    cif = cod / "cif" / "1.cif"
+def test_discovery_selects_experimental_tree_and_resolves_paths(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path / "2026.1"
+    path = root / "cif-experimental" / "0" / "00" / "00" / "2.cif"
+    path.parent.mkdir(parents=True)
+    path.touch()
+    (root / "cif-experimental" / "manifest.csv").touch()
+    standardized = root / "cif-standardized" / "2.cif"
+    standardized.parent.mkdir()
+    standardized.touch()
+    monkeypatch.chdir(tmp_path)
+
+    assert _cif_paths(Path("2026.1")) == (path,)
+    assert _cif_paths(root / "cif-experimental") == (path,)
+
+
+def test_build_icsd_cli_with_icsd_path_fallback(tmp_path: Path, monkeypatch, capsys) -> None:
+    icsd = tmp_path / "ICSD" / "2026.1"
+    cif = icsd / "cif-experimental" / "0" / "00" / "00" / "1.cif"
     cif.parent.mkdir(parents=True)
     cif.write_text(
         """data_one
+_database_code_ICSD 5
 _cell_length_a 1
 _cell_length_b 1
 _cell_length_c 1
@@ -39,7 +55,7 @@ C1 C 0 0 0
 """,
         encoding="utf-8",
     )
-    broken = cod / "cif" / "2.cif"
+    broken = cif.with_name("2.cif")
     broken.write_text(
         """data_two
 _cell_length_a 1
@@ -55,8 +71,8 @@ C1
 """,
         encoding="utf-8",
     )
-    output = tmp_path / "cod.sqlite"
-    monkeypatch.setenv("COD_PATH", str(cod))
+    output = tmp_path / "icsd.sqlite"
+    monkeypatch.setenv("ICSD_PATH", str(icsd))
 
     emitted = 0
     original_emit = cli_module._emit_result_reports
@@ -86,7 +102,7 @@ C1
         )
 
     with sqlite3.connect(output) as connection:
-        assert connection.execute("SELECT COUNT(*) FROM cod_structure_import").fetchone() == (1,)
+        assert connection.execute("SELECT COUNT(*) FROM icsd_structure_import").fetchone() == (1,)
 
     monkeypatch.setattr(cli_module, "_emit_result_reports", original_emit)
     assert (
@@ -113,8 +129,11 @@ C1
         assert connection.execute("SELECT COUNT(*) FROM atomistic_asu_structure WHERE _httk_role = 1").fetchone() == (
             1,
         )
-        assert connection.execute("SELECT COUNT(*) FROM cod_structure_import").fetchone() == (2,)
-        error = connection.execute("SELECT error FROM cod_structure_import WHERE error IS NOT NULL").fetchone()[0]
+        assert connection.execute("SELECT COUNT(*) FROM icsd_structure_import").fetchone() == (2,)
+        assert connection.execute(
+            "SELECT archive_id, icsd_code FROM icsd_structure_import WHERE error IS NULL"
+        ).fetchone() == ("1", "5")
+        error = connection.execute("SELECT error FROM icsd_structure_import WHERE error IS NOT NULL").fetchone()[0]
         assert error.startswith("CIF block 'two', CIF block is missing required atom-site columns:")
         assert "_atom_site_fract_x, _atom_site_fract_y, _atom_site_fract_z" in error
     captured = capsys.readouterr()
@@ -131,15 +150,16 @@ C1
             responses.append(client.get("/v1/structures"))
 
     monkeypatch.setattr("httk.serve.optimade.api.run_dev_server", run_dev_server)
-    assert serve_main(["--database", str(output), "--port", "8123"]) == 0
+    assert serve_main(["--format", "sqlite", "--database", str(output), "--port", "8123"]) == 0
     assert responses[0].status_code == 200
     assert responses[0].json()["meta"]["data_available"] == 1
+    assert responses[0].json()["data"][0]["id"].startswith("icsd-1-")
 
 
-def test_build_cod_cli_no_filter_reaches_worker_request(tmp_path: Path) -> None:
-    cod = tmp_path / "COD" / "cif"
-    cod.mkdir(parents=True)
-    path = cod / "1.cif"
+def test_build_icsd_cli_no_filter_reaches_worker_request(tmp_path: Path) -> None:
+    icsd = tmp_path / "ICSD" / "cif"
+    icsd.mkdir(parents=True)
+    path = icsd / "1.cif"
     path.touch()
     assert list(_requests((path,), False)) == [(None, StructureImportRequest(path, filter_enabled=False))]
 

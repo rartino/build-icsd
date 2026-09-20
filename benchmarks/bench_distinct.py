@@ -9,8 +9,8 @@ from pathlib import Path
 from bench_distinct_grid import _groups
 from httk.store import Backend, SqlStore
 
-from build_cod import distinct
-from build_cod.layout import entry_id_scheme, entry_records
+from build_icsd import distinct
+from build_icsd.layout import entry_id_scheme, entry_records
 
 
 def main() -> None:

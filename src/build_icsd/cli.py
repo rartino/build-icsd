@@ -1,4 +1,4 @@
-"""Command-line COD bulk database builder."""
+"""Command-line ICSD bulk database builder."""
 
 import argparse
 import json
@@ -12,10 +12,10 @@ from pathlib import Path
 from httk.atomistic import ASUStructureRecord
 from httk.store import Backend, SqlStore
 
-from build_cod.canonicalize import _bounded_results
-from build_cod.layout import entry_id_scheme, entry_records
-from build_cod.progress import CompletionPrognosis
-from build_cod.records import (
+from build_icsd.canonicalize import _bounded_results
+from build_icsd.layout import entry_id_scheme, entry_records
+from build_icsd.progress import CompletionPrognosis
+from build_icsd.records import (
     StructureImportRecord,
     StructureImportRequest,
     _read_structure,
@@ -37,21 +37,23 @@ def _default_workers() -> int:
     return os.cpu_count() or 1
 
 
-def _cif_paths(cod_path: Path) -> tuple[Path, ...]:
-    if not cod_path.is_dir():
-        raise ValueError(f"COD path is not a directory: {cod_path}")
-    cif_root = cod_path / "cif"
+def _cif_paths(icsd_path: Path) -> tuple[Path, ...]:
+    if not icsd_path.is_dir():
+        raise ValueError(f"ICSD path is not a directory: {icsd_path}")
+    cif_root = icsd_path / "cif-experimental"
     if not cif_root.is_dir():
-        cif_root = cod_path
-    return tuple(sorted(cif_root.rglob("*.cif")))
+        cif_root = icsd_path
+    return tuple(sorted(path.resolve() for path in cif_root.rglob("*.cif")))
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Build an httk database from COD CIF files.")
-    parser.add_argument("cod_path", nargs="?", type=Path, help="DATA/COD or a directory containing CIF files")
+    parser = argparse.ArgumentParser(description="Build an httk database from ICSD CIF files.")
+    parser.add_argument(
+        "icsd_path", nargs="?", type=Path, help="ICSD release directory with cif-experimental/ or an extracted CIF tree"
+    )
     parser.add_argument("--format", choices=("sqlite", "duckdb"), default="duckdb", dest="database_format")
     parser.add_argument(
-        "--output", type=Path, help="new database file (default: database/cod.sqlite or database/cod.duckdb)"
+        "--output", type=Path, help="new database file (default: database/icsd.sqlite or database/icsd.duckdb)"
     )
     parser.add_argument("--workers", type=_positive_int, default=_default_workers())
     parser.add_argument("--progress-every", type=_positive_int, default=1000)
@@ -117,20 +119,20 @@ def _requests(paths: Iterable[Path], filter_enabled: bool) -> Iterator[tuple[Non
 def main(argv: list[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
-    cod_path = args.cod_path or (Path(os.environ["COD_PATH"]) if os.environ.get("COD_PATH") else None)
-    if cod_path is None:
-        parser.error("COD path is required (pass it positionally or set COD_PATH)")
+    icsd_path = args.icsd_path or (Path(os.environ["ICSD_PATH"]) if os.environ.get("ICSD_PATH") else None)
+    if icsd_path is None:
+        parser.error("ICSD path is required (pass it positionally or set ICSD_PATH)")
 
-    print(f"Discovering CIF files under {cod_path}...", flush=True)
-    output = args.output or Path("database") / f"cod.{args.database_format}"
+    print(f"Discovering CIF files under {icsd_path}...", flush=True)
+    output = args.output or Path("database") / f"icsd.{args.database_format}"
     try:
-        paths = _cif_paths(cod_path)
+        paths = _cif_paths(icsd_path)
     except ValueError as error:
         parser.error(str(error))
 
     print(f"Discovered {len(paths)} CIF files.", flush=True)
     if not paths:
-        parser.error(f"no .cif files found under {cod_path}")
+        parser.error(f"no .cif files found under {icsd_path}")
 
     output.parent.mkdir(parents=True, exist_ok=True)
     database = Backend.sqlite(output) if args.database_format == "sqlite" else Backend.duckdb(output)

@@ -3,9 +3,9 @@ requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "build-cod"
+name = "build-icsd"
 version = "0.1.0"
-description = "Build an httk structure database from a COD CIF tree."
+description = "Build an httk structure database from an ICSD CIF tree."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -22,10 +22,10 @@ dev = [
 ]
 
 [project.scripts]
-build-cod = "build_cod.cli:main"
-build-cod-canonicalize = "build_cod.canonicalize:main"
-build-cod-distinct = "build_cod.distinct:main"
-serve-cod-optimade = "serve_cod_optimade.cli:main"
+build-icsd = "build_icsd.cli:main"
+build-icsd-canonicalize = "build_icsd.canonicalize:main"
+build-icsd-distinct = "build_icsd.distinct:main"
+serve-icsd-optimade = "serve_icsd_optimade.cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

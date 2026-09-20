@@ -13,8 +13,8 @@ from httk.atomistic.entries.structures import StructureEntry
 from httk.core.storage import content_id
 from httk.store import Backend, SqlStore
 
-from build_cod import distinct
-from build_cod.layout import entry_id_scheme, entry_records
+from build_icsd import distinct
+from build_icsd.layout import entry_id_scheme, entry_records
 
 _MAX_COVERAGE_SIZE = 150
 _STRATEGIES = ("first", "variance", "occupancy")
@@ -32,9 +32,9 @@ def _groups(
 ) -> list[tuple[str, str, tuple[str, ...], float, int]]:
     """Read selected group member ids from either canonicalization schema.
 
-    The local profiling database predates the bare/refined catalog split: its
-    ``cod_canonicalization`` columns still use ``prototype_content_id`` and
-    ``protostructure_content_id``.  The current pass-2 schema uses the corresponding
+    Retain support for the legacy column layout used by the original COD profiler:
+    ``prototype_content_id`` and ``protostructure_content_id``. The current
+    ICSD pass-2 schema uses the corresponding
     ``bare_*`` columns.  For the legacy database, the old group key cannot be passed to
     the current distinct worker because the class split changes the content identity.
     We therefore derive the current bare identity from one source structure after the
@@ -45,7 +45,7 @@ def _groups(
         raise ValueError(f"unknown group kind: {kind}")
     work = []
     with duckdb.connect(str(source), read_only=True, config={"threads": 1, "memory_limit": "256MB"}) as conn:
-        columns = {row[0] for row in conn.execute("DESCRIBE cod_canonicalization").fetchall()}
+        columns = {row[0] for row in conn.execute("DESCRIBE icsd_canonicalization").fetchall()}
         bare_column = f"bare_{kind}_content_id"
         legacy_column = f"{kind}_content_id"
         if bare_column in columns:
@@ -55,10 +55,10 @@ def _groups(
             group_column = legacy_column
             legacy = True
         else:
-            raise ValueError(f"cod_canonicalization has neither {bare_column} nor {legacy_column}")
+            raise ValueError(f"icsd_canonicalization has neither {bare_column} nor {legacy_column}")
         for key in keys:
             rows = conn.execute(
-                f"SELECT DISTINCT canonical_content_id FROM cod_canonicalization "
+                f"SELECT DISTINCT canonical_content_id FROM icsd_canonicalization "
                 f"WHERE error IS NULL AND {group_column}=? ORDER BY canonical_content_id",
                 [key],
             ).fetchall()
