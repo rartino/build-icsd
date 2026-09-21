@@ -155,7 +155,7 @@ def test_canonicalization_rejects_the_source_as_its_output(tmp_path: Path) -> No
 
 
 @pytest.mark.parametrize("fmt", ["sqlite", "duckdb"])
-def test_two_pass_import_and_canonicalization(tmp_path: Path, fmt: str) -> None:
+def test_two_pass_import_and_canonicalization(tmp_path: Path, fmt: str, monkeypatch: pytest.MonkeyPatch) -> None:
     # The DuckDB parametrization runs pass 1 as a parallel (workers=2) `deferred`-finalize
     # import with a promote= record -- the exact path two httk-store bugs once broke. It now
     # passing on DuckDB with the same `deferred` finalize SQLite uses is the regression guard
@@ -171,6 +171,12 @@ def test_two_pass_import_and_canonicalization(tmp_path: Path, fmt: str) -> None:
     source = tmp_path / f"icsd.{fmt}"
     canonical = tmp_path / f"icsd-canonical.{fmt}"
     assert build_main([str(icsd), "--format", fmt, "--output", str(source), "--workers", "2"]) == 0
+
+    # A spawned worker must not inherit parent memory (including open database state).
+    def reject_inherited_state(*_args, **_kwargs):
+        raise AssertionError("canonicalization worker inherited parent state")
+
+    monkeypatch.setattr("build_icsd.canonicalize.canonical_asu", reject_inherited_state)
     assert canon_main([str(source), "--output", str(canonical), "--format", fmt, "--workers", "2", "--lift"]) == 0
 
     backend, SqlStore = _open_store(source, fmt)

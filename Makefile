@@ -33,13 +33,13 @@ build_std canonicalize_std distinct_std: override VARIANT = std
 
 build_expt build_std:
 	mkdir -p database
-	PYTHONPATH="src$${PYTHONPATH:+:$${PYTHONPATH}}" ICSD_PATH="$(ICSD_PATH)" $(PYTHON) -c 'from httk.core.cli import main; raise SystemExit(main())' memguard --max-rss-gb 24 $(PYTHON) -m build_icsd --format "$(FORMAT)" --output "$(IMPORT_OUTPUT)" --workers "$(WORKERS)" --progress-every "$(PROGRESS_EVERY)" --commit-every "$(COMMIT_EVERY)"
+	PYTHONPATH="src$${PYTHONPATH:+:$${PYTHONPATH}}" ICSD_PATH="$(ICSD_PATH)" $(PYTHON) -c 'from httk.core.cli import main; raise SystemExit(main())' memguard --max-pss-gb 24 $(PYTHON) -m build_icsd --format "$(FORMAT)" --output "$(IMPORT_OUTPUT)" --workers "$(WORKERS)" --progress-every "$(PROGRESS_EVERY)" --commit-every "$(COMMIT_EVERY)"
 
 canonicalize_expt canonicalize_std:
-	PYTHONPATH="src$${PYTHONPATH:+:$${PYTHONPATH}}" $(PYTHON) -c 'from httk.core.cli import main; raise SystemExit(main())' memguard --max-rss-gb 24 $(PYTHON) -m build_icsd.canonicalize "$(IMPORT_OUTPUT)" --output "$(CANONICAL_OUTPUT)" --format "$(FORMAT)" --workers "$(WORKERS)" --progress-every "$(PROGRESS_EVERY)" --chunk "$(COMMIT_EVERY)" --max-asu-sites "$(CANONICAL_MAX_ASU_SITES)" --stats
+	PYTHONPATH="src$${PYTHONPATH:+:$${PYTHONPATH}}" $(PYTHON) -c 'from httk.core.cli import main; raise SystemExit(main())' memguard --max-pss-gb 24 $(PYTHON) -m build_icsd.canonicalize "$(IMPORT_OUTPUT)" --output "$(CANONICAL_OUTPUT)" --format "$(FORMAT)" --workers "$(WORKERS)" --progress-every "$(PROGRESS_EVERY)" --chunk "$(COMMIT_EVERY)" --max-asu-sites "$(CANONICAL_MAX_ASU_SITES)" --stats
 
 distinct_expt distinct_std:
-	PYTHONPATH="src$${PYTHONPATH:+:$${PYTHONPATH}}" $(PYTHON) -c 'from httk.core.cli import main; raise SystemExit(main())' memguard --max-rss-gb 24 $(PYTHON) -m build_icsd.distinct "$(CANONICAL_OUTPUT)" --output "$(DISTINCT_OUTPUT)" --format "$(FORMAT)" --workers "$(WORKERS)" --progress-every "$(DISTINCT_PROGRESS_EVERY)" --ingest-chunk "$(DISTINCT_INGEST_CHUNK)" --commit-every "$(DISTINCT_COMMIT_EVERY)" --worker-memory-limit "$(DISTINCT_WORKER_MEMORY_LIMIT)" --worker-max-tasks "$(DISTINCT_WORKER_MAX_TASKS)" --delta "$(DISTINCT_DELTA)" --grid-dimensions "$(DISTINCT_GRID_DIMENSIONS)" --grid-strategy "$(DISTINCT_GRID_STRATEGY)" --max-coverage-size "$(DISTINCT_MAX_COVERAGE_SIZE)" --stats
+	PYTHONPATH="src$${PYTHONPATH:+:$${PYTHONPATH}}" $(PYTHON) -c 'from httk.core.cli import main; raise SystemExit(main())' memguard --max-pss-gb 24 $(PYTHON) -m build_icsd.distinct "$(CANONICAL_OUTPUT)" --output "$(DISTINCT_OUTPUT)" --format "$(FORMAT)" --workers "$(WORKERS)" --progress-every "$(DISTINCT_PROGRESS_EVERY)" --ingest-chunk "$(DISTINCT_INGEST_CHUNK)" --commit-every "$(DISTINCT_COMMIT_EVERY)" --worker-memory-limit "$(DISTINCT_WORKER_MEMORY_LIMIT)" --worker-max-tasks "$(DISTINCT_WORKER_MAX_TASKS)" --delta "$(DISTINCT_DELTA)" --grid-dimensions "$(DISTINCT_GRID_DIMENSIONS)" --grid-strategy "$(DISTINCT_GRID_STRATEGY)" --max-coverage-size "$(DISTINCT_MAX_COVERAGE_SIZE)" --stats
 
 serve:
 	PYTHONPATH="src$${PYTHONPATH:+:$${PYTHONPATH}}" $(PYTHON) -m serve_icsd_optimade --format "$(FORMAT)" --database "$(CANONICAL_OUTPUT)" --host "$(HOST)" --port "$(PORT)"

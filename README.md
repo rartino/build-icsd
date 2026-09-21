@@ -146,8 +146,9 @@ finished). The format is inferred from the file suffix, or forced with `--format
 The import database is the source of truth and must not be replaced or rebuilt under the
 same source paths while a destination is being resumed.
 
-Compute (recognition, lifting, derivation) runs in a process pool; a single writer in the
-main process commits results in chunked transactions. Its progress reports use the same
+Compute (recognition, lifting, derivation) runs in spawned worker processes, which do not
+inherit the parent's database connections or caches. A single writer in the main process
+commits results in chunked transactions. Its progress reports use the same
 continuously updated ETA prognosis as pass 1.
 
 The ASU limit bounds the exact terminal normal-form tail; skipped rows are recorded as
@@ -325,8 +326,9 @@ is performed. The import database and structures-only serving declaration are un
 
 ## DuckDB caveats
 
-- `HTTK_DUCKDB_MEMORY_LIMIT` defaults to 6 GB for all build passes, which run under a
-  24 GiB process-group RSS guard. DuckDB may spill to its adjacent temporary directory.
+- `HTTK_DUCKDB_MEMORY_LIMIT` defaults to 6 GB. All pipeline targets run under a
+  24 GiB process-group PSS guard, which apportions shared pages without counting them
+  once per worker. DuckDB may spill to its adjacent temporary directory.
 
 ## Make targets and serving
 

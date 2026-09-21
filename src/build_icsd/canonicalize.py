@@ -13,6 +13,7 @@ the main process saves results in chunked transactions.
 """
 
 import argparse
+import multiprocessing
 import os
 import time
 from collections.abc import Callable, Iterable, Iterator
@@ -337,7 +338,8 @@ def main(argv: list[str] | None = None) -> int:
             flush=True,
         )
 
-        with ProcessPoolExecutor(max_workers=args.workers) as pool:
+        # Workers receive records; do not inherit the parent's open databases and caches.
+        with ProcessPoolExecutor(max_workers=args.workers, mp_context=multiprocessing.get_context("spawn")) as pool:
             # Keep only ~2 inputs per worker in flight so the eager per-row fetch materializes
             # a bounded window of structures at a time, never the whole corpus up front.
             tagged = _iter_inputs(source_store, work, args.tolerance, args.lift, args.max_asu_sites)
